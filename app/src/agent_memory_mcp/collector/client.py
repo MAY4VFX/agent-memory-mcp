@@ -60,10 +60,19 @@ class TelegramCollector:
     _FOLDER_CACHE_TTL = 300  # 5 min
 
     def __init__(self) -> None:
+        proxy = None
+        if settings.telegram_proxy:
+            # Parse socks5://host:port
+            from python_socks import ProxyType
+            url = settings.telegram_proxy
+            host = url.split("://")[1].split(":")[0]
+            port = int(url.split(":")[-1])
+            proxy = (ProxyType.SOCKS5, host, port)
         self._client = TelegramClient(
             StringSession(settings.telegram_session),
             settings.telegram_api_id,
             settings.telegram_api_hash,
+            proxy=proxy,
         )
         self._folder_cache: list[dict] | None = None
         self._folder_cache_ts: float = 0

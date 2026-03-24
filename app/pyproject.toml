@@ -55,6 +55,9 @@ dependencies = [
     "tonutils>=0.2",
     # Session encryption
     "cryptography>=44.0",
+    # SOCKS5 proxy for Telegram
+    "python-socks[asyncio]>=2.4",
+    "aiohttp-socks>=0.9",
 ]
 
 [tool.setuptools.packages.find]
