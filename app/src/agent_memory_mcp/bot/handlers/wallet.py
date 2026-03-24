@@ -23,20 +23,20 @@ log = structlog.get_logger(__name__)
 router = Router()
 
 
-@router.message(F.text == "💎 Пополнить")
+@router.message(F.text == "💎 Top Up")
 async def btn_topup(message: Message):
-    """Show top-up amount selection (inline buttons for amount choice)."""
+    """Show top-up amount selection."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="0.5 TON → 500 кр.", callback_data="topup:0.5"),
-            InlineKeyboardButton(text="1 TON → 1000 кр.", callback_data="topup:1"),
+            InlineKeyboardButton(text="0.5 TON → 500 cr.", callback_data="topup:0.5"),
+            InlineKeyboardButton(text="1 TON → 1000 cr.", callback_data="topup:1"),
         ],
         [
-            InlineKeyboardButton(text="5 TON → 5000 кр.", callback_data="topup:5"),
-            InlineKeyboardButton(text="10 TON → 10000 кр.", callback_data="topup:10"),
+            InlineKeyboardButton(text="5 TON → 5000 cr.", callback_data="topup:5"),
+            InlineKeyboardButton(text="10 TON → 10000 cr.", callback_data="topup:10"),
         ],
     ])
-    await message.answer("💎 <b>Пополнение баланса</b>\n\nВыбери сумму:", reply_markup=kb)
+    await message.answer("💎 <b>Top up balance</b>\n\nChoose amount:", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("topup:"))
@@ -49,14 +49,14 @@ async def cb_topup_amount(callback: CallbackQuery):
     deeplink = build_ton_deeplink(amount_ton, payment_id)
 
     text = (
-        f"💎 <b>Пополнение: {amount_ton} TON → {credits} кредитов</b>\n\n"
-        f"Отправь <b>{amount_ton} TON</b> на адрес:\n"
+        f"💎 <b>Top up: {amount_ton} TON → {credits} credits</b>\n\n"
+        f"Send <b>{amount_ton} TON</b> to:\n"
         f"<code>{settings.ton_wallet_address}</code>\n\n"
-        f"С комментарием: <code>{payment_id}</code>\n\n"
-        "⏳ Ожидаю оплату (до 5 мин)..."
+        f"With comment: <code>{payment_id}</code>\n\n"
+        "⏳ Waiting for payment (up to 5 min)..."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить в Tonkeeper", url=deeplink)],
+        [InlineKeyboardButton(text="💳 Pay with Tonkeeper", url=deeplink)],
     ])
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
@@ -84,16 +84,16 @@ async def _watch_payment(message, api_key_id, amount_ton: float, payment_id: str
     )
     if result["status"] == "confirmed":
         text = (
-            f"✅ <b>Оплата подтверждена!</b>\n\n"
-            f"Зачислено: +{result['credits_added']} кредитов\n"
-            f"Баланс: {result['balance']} кредитов\n"
+            f"✅ <b>Payment confirmed!</b>\n\n"
+            f"Added: +{result['credits_added']} credits\n"
+            f"Balance: {result['balance']} credits\n"
             f"TX: <code>{result['tx_hash'][:16]}...</code>"
         )
     else:
         text = (
-            "⏰ <b>Время ожидания истекло</b>\n\n"
-            "Платёж не найден. Если ты отправил TON, "
-            "подожди немного и проверь баланс."
+            "⏰ <b>Payment timeout</b>\n\n"
+            "Payment not found. If you sent TON, "
+            "wait a moment and check your balance."
         )
     try:
         await message.edit_text(text)

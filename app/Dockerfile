@@ -13,7 +13,10 @@ COPY pyproject.toml .
 COPY alembic.ini .
 COPY src/ src/
 
-RUN pip install --no-cache-dir .
+# Use Privoxy proxy for pip if pypi.org is blocked
+ENV PIP_PROXY=http://192.168.2.140:8118
+RUN pip install --no-cache-dir --proxy "$PIP_PROXY" . ; \
+    unset PIP_PROXY
 
 EXPOSE 8002
 
