@@ -11,7 +11,17 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from agent_memory_mcp.db.tables import metadata as target_metadata
 
+import os
+
 config = context.config
+
+# Override sqlalchemy.url from environment if available
+db_url = os.environ.get("DATABASE_URL_SYNC") or os.environ.get("DATABASE_URL", "")
+if db_url:
+    # Ensure sync driver for alembic
+    db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+    config.set_main_option("sqlalchemy.url", db_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
