@@ -46,16 +46,37 @@ async def _resolve_owner(ctx: Context | None) -> int:
     # Try to get Bearer token from request headers
     if ctx:
         try:
-            request = ctx.request  # type: ignore
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                api_key_raw = auth_header.removeprefix("Bearer ").strip()
-        except Exception:
-            pass
+            # FastMCP may expose request differently depending on version
+            request = getattr(ctx, "request", None)
+            if request is None:
+                # Try getting from _request or transport
+                request = getattr(ctx, "_request", None)
+            if request:
+                auth_header = request.headers.get("authorization", "")
+                if auth_header.startswith("Bearer "):
+                    api_key_raw = auth_header.removeprefix("Bearer ").strip()
+                    log.info("mcp_bearer_found", key_prefix=api_key_raw[:12] if api_key_raw else "?")
+                else:
+                    log.warning("mcp_no_bearer_header", auth_header=auth_header[:30] if auth_header else "empty")
+            else:
+                log.warning("mcp_no_request_in_ctx", ctx_type=type(ctx).__name__, ctx_attrs=str(dir(ctx))[:200])
+        except Exception as e:
+            log.warning("mcp_resolve_owner_error", error=str(e))
+
+    # If Bearer token is an OAuth access code (not amk_ key), look it up in auth codes
+    if api_key_raw and not api_key_raw.startswith("amk_"):
+        # OAuth flow: the Bearer token is actually an access token that maps to an API key
+        from agent_memory_mcp.memory_api.oauth import _auth_codes
+        # Check if it's a stored access token → api_key mapping
+        if api_key_raw in _auth_codes:
+            real_key, _ = _auth_codes[api_key_raw]
+            api_key_raw = real_key
+            log.debug("oauth_token_resolved", token_prefix=api_key_raw[:8] if api_key_raw else "?")
 
     # Fallback to admin
     if not api_key_raw:
         from agent_memory_mcp.config import settings
+        log.debug("mcp_no_bearer_fallback_admin")
         return settings.admin_telegram_id
 
     key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
@@ -66,6 +87,7 @@ async def _resolve_owner(ctx: Context | None) -> int:
     api_key = await get_api_key_by_hash(async_engine, key_hash)
     if not api_key or not api_key["is_active"]:
         from agent_memory_mcp.config import settings
+        log.warning("mcp_api_key_not_found", key_prefix=api_key_raw[:8] if api_key_raw else "?")
         return settings.admin_telegram_id
 
     _key_cache[key_hash] = api_key
