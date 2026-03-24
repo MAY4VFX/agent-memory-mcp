@@ -21,20 +21,20 @@ class Settings(BaseSettings):
 
     # --- PostgreSQL ---
     database_url: str = Field(
-        default="postgresql+asyncpg://kb_user:In1REnpg2paxFFgK4mo3Cvf93hXZaOYZ@tgkb-postgres-u39bc9:5432/agent_memory_mcp",
+        default="postgresql+asyncpg://amm_user:AmmSecure2026Pwd@amm-postgres-rwqeha:5432/agent_memory_mcp",
     )
     database_url_sync: str = Field(
-        default="postgresql://kb_user:In1REnpg2paxFFgK4mo3Cvf93hXZaOYZ@tgkb-postgres-u39bc9:5432/agent_memory_mcp",
+        default="postgresql://amm_user:AmmSecure2026Pwd@amm-postgres-rwqeha:5432/agent_memory_mcp",
     )
 
     # --- Milvus ---
-    milvus_host: str = "tgkb-milvus-8y7y6u-milvus-1"
+    milvus_host: str = "amm-milvus-whraed-milvus-1"
     milvus_port: int = 19530
 
     # --- FalkorDB ---
-    falkordb_host: str = "tgkb-falkordb-rtwpv3-falkordb-1"
+    falkordb_host: str = "amm-falkordb-pwpx2g-falkordb-1"
     falkordb_port: int = 6379
-    falkordb_password: str = "RDOODcmcz3lNrPGdKxYDX9MO91wzL9AA"
+    falkordb_password: str = "AmmFalkor2026Pwd"
     falkordb_graph: str = "agent_memory_mcp"
 
     # --- Embedding (TEI) ---
