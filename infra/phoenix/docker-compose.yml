@@ -1,0 +1,24 @@
+services:
+  phoenix:
+    restart: unless-stopped
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+    volumes:
+      - phoenix_data:/data
+    environment:
+      PHOENIX_WORKING_DIR: /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dokploy-network
+
+volumes:
+  phoenix_data:
+
+networks:
+  dokploy-network:
+    external: true

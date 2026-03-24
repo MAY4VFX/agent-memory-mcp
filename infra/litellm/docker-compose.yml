@@ -1,0 +1,36 @@
+services:
+  litellm:
+    restart: unless-stopped
+    image: ghcr.io/berriai/litellm:v1.81.0-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "4001:4000"
+    environment:
+      DATABASE_URL: "postgresql://kb_user:In1REnpg2paxFFgK4mo3Cvf93hXZaOYZ@tgkb-postgres-u39bc9:5432/litellm"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY}"
+      LANGFUSE_SECRET_KEY: "${LANGFUSE_SECRET_KEY}"
+      LANGFUSE_HOST: "http://192.168.2.140:3500"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://phoenix:6006"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+      REDEPLOY_TAG: "3"
+      HTTP_PROXY: "${HTTP_PROXY}"
+      HTTPS_PROXY: "${HTTPS_PROXY}"
+      NO_PROXY: "localhost,127.0.0.1,192.168.2.0/24,tgkb-langfuse-qo8tul-langfuse,tgkb-postgres-u39bc9,phoenix,10.0.0.0/8"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true

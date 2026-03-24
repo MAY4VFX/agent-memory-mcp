@@ -1,0 +1,94 @@
+model_list:
+  # === Tier 1: Extraction (NER, relation extraction, noise classification) ===
+  - model_name: tier1/extraction
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "Tier 1 primary: DeepSeek V3 for extraction tasks"
+
+  - model_name: tier1/extraction-fallback
+    litellm_params:
+      model: openai/gpt-4.1-nano
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Tier 1 fallback: GPT-4.1 nano for extraction"
+
+  # === Tier 2: Reasoning (schema discovery, community summaries, HyDE) ===
+  - model_name: tier2/reasoning
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "Tier 2 primary: DeepSeek V3.2 for reasoning ($0.28/M vs Haiku $1/M)"
+
+  - model_name: tier2/reasoning-fallback
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Tier 2 fallback: Claude Haiku 4.5"
+
+  # === Tier 3: Generation (answer synthesis) ===
+  - model_name: tier3/answer
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Tier 3 primary: Claude Sonnet 4.5 for 95% queries"
+
+  - model_name: tier3/deep
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Tier 3 deep: Claude Opus 4.6 for complex multi-hop (5%)"
+
+  - model_name: tier3/answer-fallback
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Tier 3 fallback: GPT-4.1 for generation"
+
+  # === Aliases for Langfuse evaluators (standard OpenAI model names) ===
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Alias for Langfuse evaluator connection test"
+
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Alias for Langfuse evaluators (cheap)"
+
+  - model_name: gpt-4.1-nano
+    litellm_params:
+      model: openai/gpt-4.1-nano
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Alias for Langfuse evaluators (cheapest)"
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  num_retries: 2
+  request_timeout: 600
+  success_callback: ["langfuse", "otel"]
+  failure_callback: ["langfuse", "otel"]
+  fallbacks:
+    - tier1/extraction: ["tier1/extraction-fallback"]
+    - tier2/reasoning: ["tier2/reasoning-fallback"]
+    - tier3/answer: ["tier3/answer-fallback"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+environment_variables:
+  LANGFUSE_PUBLIC_KEY: os.environ/LANGFUSE_PUBLIC_KEY
+  LANGFUSE_SECRET_KEY: os.environ/LANGFUSE_SECRET_KEY
+  LANGFUSE_HOST: os.environ/LANGFUSE_HOST
