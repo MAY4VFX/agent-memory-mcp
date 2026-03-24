@@ -75,7 +75,7 @@ async def search_memory(
 
 async def list_sources(owner_id: int) -> list[dict]:
     """List all sources (domains) for a user."""
-    domains = await db_q.get_domains_by_owner(async_engine, owner_id)
+    domains = await db_q.list_domains(async_engine, owner_id)
     return [
         {
             "id": str(d["id"]),
@@ -118,7 +118,7 @@ async def get_agent_context(owner_id: int, task: str, scope: str) -> dict:
 
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
     """Resolve a scope string to domain IDs for the owner."""
-    domains = await db_q.get_domains_by_owner(async_engine, owner_id)
+    domains = await db_q.list_domains(async_engine, owner_id)
     if not domains:
         return []
 

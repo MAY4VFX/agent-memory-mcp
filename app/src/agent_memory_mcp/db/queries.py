@@ -313,6 +313,28 @@ async def create_sync_job(
         return dict(row)
 
 
+async def get_recent_messages(
+    engine: AsyncEngine,
+    domain_id: UUID,
+    days: int = 30,
+    limit: int = 500,
+) -> list[dict]:
+    """Load recent messages for a domain within N days."""
+    stmt = (
+        select(messages)
+        .where(
+            messages.c.domain_id == domain_id,
+            messages.c.msg_date >= func.now() - text(f"interval '{days} days'"),
+            messages.c.is_noise.is_(False),
+        )
+        .order_by(messages.c.msg_date.desc())
+        .limit(limit)
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
+
+
 async def get_domain_messages(
     engine: AsyncEngine,
     domain_id: UUID,
