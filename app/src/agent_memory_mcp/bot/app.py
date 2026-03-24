@@ -9,9 +9,14 @@ from agent_memory_mcp.config import settings
 
 
 def create_bot() -> Bot:
+    session = None
+    if settings.telegram_proxy:
+        from aiogram.client.session.aiohttp import AiohttpSession
+        session = AiohttpSession(proxy=settings.telegram_proxy)
     return Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
 
 

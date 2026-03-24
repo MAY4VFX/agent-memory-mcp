@@ -55,7 +55,8 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "http://tgkb-langfuse-qo8tul-langfuse-1:3000"
 
-    # --- Proxy ---
+    # --- Proxy (SOCKS5 for Telegram only, NOT for internal services) ---
+    telegram_proxy: str = ""  # socks5://192.168.2.140:1080
     http_proxy: str = ""
     https_proxy: str = ""
 
