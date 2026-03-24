@@ -18,8 +18,8 @@ def create_api_app() -> FastAPI:
     from agent_memory_mcp.config import settings
     from agent_memory_mcp.memory_api.mcp_tools import mcp
 
-    # Build MCP sub-app (Streamable HTTP on /mcp)
-    mcp_app = mcp.http_app(path="/mcp")
+    # Build MCP sub-app — path="/" because app.mount("/mcp") already adds prefix
+    mcp_app = mcp.http_app(path="/")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
