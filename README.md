@@ -47,7 +47,7 @@ pip install agent-memory-mcp
       "command": "agent-memory-mcp",
       "env": {
         "AGENT_MEMORY_API_KEY": "amk_your_key_here",
-        "AGENT_MEMORY_URL": "https://api.agent-memory.example"
+        "AGENT_MEMORY_URL": "https://agent.ai-vfx.com"
       }
     }
   }
@@ -57,7 +57,7 @@ pip install agent-memory-mcp
 ### 2. REST API
 
 ```bash
-curl -X POST https://api.agent-memory.example/api/v1/memory/search \
+curl -X POST https://agent.ai-vfx.com/api/v1/memory/search \
   -H "Authorization: Bearer amk_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"query": "what decisions were made about wallet integration?"}'

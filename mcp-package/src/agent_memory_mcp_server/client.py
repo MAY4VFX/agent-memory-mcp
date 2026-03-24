@@ -12,7 +12,7 @@ class AgentMemoryClient:
     """Thin HTTP client that forwards requests to the Agent Memory REST API."""
 
     def __init__(self) -> None:
-        self.url = os.environ.get("AGENT_MEMORY_URL", "http://localhost:8002").rstrip("/")
+        self.url = os.environ.get("AGENT_MEMORY_URL", "https://agent.ai-vfx.com").rstrip("/")
         self.key = os.environ.get("AGENT_MEMORY_API_KEY", "")
         if not self.key:
             raise RuntimeError(
