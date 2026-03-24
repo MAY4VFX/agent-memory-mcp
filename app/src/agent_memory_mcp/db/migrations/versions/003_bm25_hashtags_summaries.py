@@ -50,8 +50,9 @@ def upgrade() -> None:
             RETURN NEW;
         END;
         $t$ LANGUAGE plpgsql;
-
-        DROP TRIGGER IF EXISTS trg_messages_tsv ON messages;
+    """)
+    op.execute("DROP TRIGGER IF EXISTS trg_messages_tsv ON messages;")
+    op.execute("""
         CREATE TRIGGER trg_messages_tsv
             BEFORE INSERT OR UPDATE OF content ON messages
             FOR EACH ROW EXECUTE FUNCTION messages_tsv_trigger();
