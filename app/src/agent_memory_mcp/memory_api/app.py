@@ -7,9 +7,6 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -19,47 +16,12 @@ from agent_memory_mcp.memory_api.oauth import router as oauth_router
 log = structlog.get_logger(__name__)
 
 
-class MCPAuthMiddleware(BaseHTTPMiddleware):
-    """Require Bearer token on MCP endpoints. Return 401 to trigger OAuth flow."""
-
-    async def dispatch(self, request: Request, call_next) -> Response:
-        path = request.url.path
-
-        # Allow OAuth discovery and well-known endpoints without auth
-        if "/.well-known/" in path or "/oauth/" in path:
-            return await call_next(request)
-
-        # Allow OPTIONS (CORS preflight)
-        if request.method == "OPTIONS":
-            return await call_next(request)
-
-        # Check for Bearer token
-        auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer ") or len(auth) < 15:
-            # Return 401 with OAuth resource metadata to trigger auth flow
-            base = str(request.base_url).rstrip("/")
-            return JSONResponse(
-                status_code=401,
-                headers={
-                    "WWW-Authenticate": 'Bearer',
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Expose-Headers": "WWW-Authenticate",
-                },
-                content={
-                    "error": "unauthorized",
-                    "error_description": "API key required. Authenticate via OAuth or pass Bearer token.",
-                },
-            )
-
-        return await call_next(request)
-
-
 def create_api_app() -> FastAPI:
     """Create the FastAPI application with Memory API routes + MCP endpoint."""
     from agent_memory_mcp.config import settings
     from agent_memory_mcp.memory_api.mcp_tools import mcp
 
-    # Build MCP sub-app with auth middleware
+    # Build MCP sub-app
     mcp_app = mcp.http_app(path="/")
 
     @asynccontextmanager
@@ -76,6 +38,52 @@ def create_api_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Auth middleware — require Bearer token for /mcp/ requests
+    @app.middleware("http")
+    async def mcp_auth_middleware(request: Request, call_next) -> Response:
+        path = request.url.path
+
+        # Only check /mcp/ paths (not /api/, /oauth/, etc.)
+        if not path.startswith("/mcp"):
+            return await call_next(request)
+
+        # Allow well-known (OAuth discovery)
+        if "/.well-known/" in path:
+            return await call_next(request)
+
+        # Allow OPTIONS (CORS)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # Allow GET on /mcp/ root (SSE connection setup)
+        if request.method == "GET":
+            # Check auth on GET too
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer "):
+                return JSONResponse(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                    content={
+                        "error": "unauthorized",
+                        "error_description": "Bearer token required. Get your API key at https://t.me/AgentMemoryBot",
+                    },
+                )
+            return await call_next(request)
+
+        # POST /mcp/ — main MCP requests
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer ") or len(auth) < 15:
+            return JSONResponse(
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+                content={
+                    "error": "unauthorized",
+                    "error_description": "Bearer token required. Get your API key at https://t.me/AgentMemoryBot",
+                },
+            )
+
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -89,15 +97,9 @@ def create_api_app() -> FastAPI:
     # OAuth routes (for MCP authentication)
     app.include_router(oauth_router)
 
-    # Mount MCP with auth middleware wrapper
+    # Mount MCP Streamable HTTP server
     if settings.run_mcp:
-        # Wrap MCP app with auth middleware
-        authed_mcp = Starlette(
-            routes=mcp_app.routes,
-            middleware=[Middleware(MCPAuthMiddleware)],
-            lifespan=mcp_app.router.lifespan_context,
-        )
-        app.mount("/mcp", authed_mcp)
+        app.mount("/mcp", mcp_app)
         log.info("mcp_mounted", path="/mcp", auth="required")
 
     return app
