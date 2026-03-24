@@ -1,4 +1,4 @@
-"""FastAPI application — Memory API + MCP server."""
+"""FastAPI application — Memory API + MCP server + OAuth."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_memory_mcp.memory_api.routes import router as api_router
+from agent_memory_mcp.memory_api.oauth import router as oauth_router
 
 log = structlog.get_logger(__name__)
 
@@ -44,6 +45,9 @@ def create_api_app() -> FastAPI:
 
     # REST API routes
     app.include_router(api_router)
+
+    # OAuth routes (for MCP authentication)
+    app.include_router(oauth_router)
 
     # Mount MCP Streamable HTTP server
     if settings.run_mcp:
