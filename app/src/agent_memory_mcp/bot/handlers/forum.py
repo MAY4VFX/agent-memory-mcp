@@ -13,6 +13,9 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -44,7 +47,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    """Handle /start — create API key, show main menu with reply keyboard."""
+    """Handle /start — welcome message, offer to create API key."""
     user_id = message.from_user.id
 
     from sqlalchemy import text
@@ -55,31 +58,80 @@ async def cmd_start(message: Message):
         )
         existing = row.mappings().first()
 
-    if existing:
-        key_prefix = existing["key_prefix"]
-        balance = existing["credits_balance"]
-    else:
-        full_key, rec = await create_api_key_for_user(
-            async_engine, user_id,
-            name="default",
-            bonus_credits=settings.welcome_bonus_credits,
-        )
-        key_prefix = rec["key_prefix"]
-        balance = rec["credits_balance"]
-        await message.answer(
-            f"🔑 <b>Твой API key (покажу один раз!):</b>\n"
-            f"<code>{full_key}</code>\n\n"
-            f"Сохрани его — потом покажу только префикс.",
-        )
-
+    # Welcome message — always show
     await message.answer(
         "🧠 <b>Agent Memory MCP</b>\n\n"
-        f"API key: <code>{key_prefix}...</code>\n"
-        f"Баланс: <b>{balance}</b> кредитов\n\n"
-        "Создай новый тред, чтобы поговорить с агентом.\n"
+        "Память для AI-агентов на базе Telegram.\n\n"
+        "Мы превращаем историю твоих чатов, каналов и папок "
+        "в структурированную долгосрочную память, которую может "
+        "использовать любой AI-агент.\n\n"
+        "<b>Что умеет:</b>\n"
+        "• Поиск по памяти — найти что угодно в истории чатов\n"
+        "• Дайджесты — ключевые темы за период\n"
+        "• Решения — извлечь принятые решения и задачи\n"
+        "• Контекст — собрать пакет знаний для агента\n\n"
+        "<b>Как подключить:</b>\n"
+        "1. Создай API key (кнопка 🔑 внизу)\n"
+        "2. Подключи к своему агенту через MCP или REST API\n"
+        "3. Создай новый тред здесь, чтобы попробовать\n\n"
         "Управление — кнопки внизу ⬇️",
         reply_markup=main_menu_kb(),
     )
+
+    if existing:
+        await message.answer(
+            f"С возвращением! Баланс: <b>{existing['credits_balance']}</b> кредитов.",
+        )
+    else:
+        # Offer to create API key
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔑 Создать API key", callback_data="create_first_key")],
+        ])
+        await message.answer(
+            "У тебя ещё нет API ключа. Создать сейчас?\n"
+            f"Получишь <b>{settings.welcome_bonus_credits}</b> бонусных кредитов.",
+            reply_markup=kb,
+        )
+
+
+@router.callback_query(F.data == "create_first_key")
+async def cb_create_first_key(callback: CallbackQuery):
+    """Create first API key, show it once, then delete the message."""
+    user_id = callback.from_user.id
+
+    # Check if already created (double-click protection)
+    from sqlalchemy import text
+    async with async_engine.begin() as conn:
+        row = await conn.execute(
+            text("SELECT id FROM api_keys WHERE telegram_id = :tid LIMIT 1"),
+            {"tid": user_id},
+        )
+        if row.first():
+            await callback.answer("Ключ уже создан!", show_alert=True)
+            return
+
+    full_key, rec = await create_api_key_for_user(
+        async_engine, user_id,
+        name="default",
+        bonus_credits=settings.welcome_bonus_credits,
+    )
+
+    # Show key in a temporary message
+    key_msg = await callback.message.edit_text(
+        f"🔑 <b>Твой API key:</b>\n\n"
+        f"<code>{full_key}</code>\n\n"
+        f"Баланс: <b>{rec['credits_balance']}</b> кредитов\n\n"
+        "⚠️ <b>Скопируй и сохрани!</b> Это сообщение удалится через 60 секунд.",
+    )
+    await callback.answer()
+
+    # Auto-delete after 60 seconds
+    import asyncio
+    await asyncio.sleep(60)
+    try:
+        await key_msg.delete()
+    except Exception:
+        pass
 
 
 # --- Reply keyboard button handlers ---
