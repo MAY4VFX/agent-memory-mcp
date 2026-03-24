@@ -1,0 +1,13 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.may4vfx/agent-memory-mcp",
+  "description": "Shared memory infrastructure for Telegram-native AI agents. Search conversations, get digests, extract decisions.",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registry_name": "pypi",
+      "name": "agent-memory-mcp",
+      "version": "0.1.0"
+    }
+  ]
+}
