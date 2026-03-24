@@ -29,7 +29,13 @@ _clients: dict[str, dict] = {}
 AUTH_CODE_TTL = 300  # 5 minutes
 
 
+def _force_https(url: str) -> str:
+    """Force HTTPS — server is behind Cloudflare/Nginx reverse proxy."""
+    return url.replace("http://", "https://", 1)
+
+
 def _build_metadata(base: str) -> dict:
+    base = _force_https(base)
     return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
@@ -56,6 +62,7 @@ async def oauth_metadata_mcp(request: Request):
 
 
 def _build_protected_resource(base: str) -> dict:
+    base = _force_https(base)
     return {
         "resource": f"{base}/mcp/",
         "authorization_servers": [base],
