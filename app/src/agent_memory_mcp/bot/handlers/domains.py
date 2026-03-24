@@ -28,7 +28,9 @@ _DOMAIN_EMOJIS = {"\U0001f525", "\U0001f916", "\U0001f3ac", "\U0001f9e0",
                   "\U0001f4c1", "\U0001f30d"}
 
 
-def _looks_like_channel(text: str) -> bool:
+def _looks_like_channel(text: str | None) -> bool:
+    if not text:
+        return False
     text = text.strip()
     return text.startswith("@") or bool(_LINK_RE.match(text))
 
