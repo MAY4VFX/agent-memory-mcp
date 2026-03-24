@@ -9,5 +9,11 @@
       "name": "agent-memory-mcp",
       "version": "0.1.0"
     }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://agent.ai-vfx.com/mcp/"
+    }
   ]
 }
