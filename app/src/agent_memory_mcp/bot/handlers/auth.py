@@ -51,13 +51,15 @@ class AuthStates(StatesGroup):
     waiting_2fa = State()
 
 
-@router.callback_query(F.data == "connect_telegram")
-async def cb_connect_telegram(callback: CallbackQuery, state: FSMContext):
-    """Start Telegram auth flow — ask user to share contact."""
-    # Check if already connected
-    session = await db_q.get_telegram_session(async_engine, callback.from_user.id)
+async def _start_auth_flow(message: Message, state: FSMContext) -> None:
+    """Common auth flow entry: show contact sharing keyboard."""
+    session = await db_q.get_telegram_session(async_engine, message.from_user.id if hasattr(message, 'from_user') else 0)
     if session:
-        await callback.answer("Telegram already connected!", show_alert=True)
+        from agent_memory_mcp.bot.handlers.forum import main_menu_kb
+        await message.answer(
+            "📱 Telegram already connected! ✅",
+            reply_markup=main_menu_kb(telegram_connected=True),
+        )
         return
 
     kb = ReplyKeyboardMarkup(
@@ -68,13 +70,25 @@ async def cb_connect_telegram(callback: CallbackQuery, state: FSMContext):
         resize_keyboard=True,
         one_time_keyboard=True,
     )
-    await callback.message.answer(
+    await message.answer(
         "📱 <b>Connect your Telegram account</b>\n\n"
         "This lets me read your channels and groups.\n"
         "Press the button below to share your phone number:",
         reply_markup=kb,
     )
     await state.set_state(AuthStates.waiting_contact)
+
+
+@router.message(F.text == "📱 Connect Telegram")
+async def btn_connect_telegram(message: Message, state: FSMContext):
+    """Reply keyboard button — start Telegram auth flow."""
+    await _start_auth_flow(message, state)
+
+
+@router.callback_query(F.data == "connect_telegram")
+async def cb_connect_telegram(callback: CallbackQuery, state: FSMContext):
+    """Inline button — start Telegram auth flow."""
+    await _start_auth_flow(callback.message, state)
     await callback.answer()
 
 
@@ -238,10 +252,12 @@ async def on_code_entered(message: Message, state: FSMContext, collector_pool: C
     except Exception:
         pass
 
+    from agent_memory_mcp.bot.handlers.forum import main_menu_kb
     await message.answer(
         "✅ <b>Telegram connected!</b>\n\n"
         "Now I can read your channels and groups.\n"
-        "Add a source: send @channel_username or use MCP add_source tool."
+        "Add a source: press 📡 Sources or use MCP add_source tool.",
+        reply_markup=main_menu_kb(telegram_connected=True),
     )
 
 
@@ -294,8 +310,10 @@ async def on_2fa_entered(message: Message, state: FSMContext, collector_pool: Co
     except Exception:
         pass
 
+    from agent_memory_mcp.bot.handlers.forum import main_menu_kb
     await message.answer(
         "✅ <b>Telegram connected!</b>\n\n"
         "Now I can read your channels and groups.\n"
-        "Add a source: send @channel_username or use MCP add_source tool."
+        "Add a source: press 📡 Sources or use MCP add_source tool.",
+        reply_markup=main_menu_kb(telegram_connected=True),
     )
