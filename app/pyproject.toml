@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-memory-mcp"
+version = "0.1.0"
+description = "Agent Memory MCP — shared memory infrastructure for Telegram-native AI agents"
+requires-python = ">=3.12"
+dependencies = [
+    # Pipeline (ingestion components)
+    "haystack-ai>=2.9,<3",
+    # Bot
+    "aiogram>=3.15,<4",
+    # Telegram collector
+    "telethon>=1.37,<2",
+    "cryptg>=0.4",
+    # Database
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    # Milvus
+    "pymilvus>=2.5,<3",
+    # FalkorDB
+    "falkordb>=1.1,<2",
+    # LLM (OpenAI-compatible client -> LiteLLM proxy)
+    "openai>=1.50,<2",
+    # HTTP
+    "httpx>=0.27",
+    # Settings
+    "pydantic-settings>=2.5",
+    "pydantic>=2.9,<3",
+    # Observability
+    "langfuse>=2.50",
+    # Utils
+    "structlog>=24.1",
+    "tenacity>=9.0",
+    "orjson>=3.10",
+    # Token counting
+    "tiktoken>=0.7",
+    # Graph algorithms (community detection — Leiden)
+    "python-igraph>=0.11",
+    "leidenalg>=0.10",
+    # Eval (RAGAS + langchain adapter)
+    "ragas>=0.2",
+    "langchain-openai>=0.3",
+    # Clustering (digest pipeline)
+    "numpy>=1.26",
+    # API server
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    # MCP server
+    "fastmcp>=2.3.1",
+    # TON integration
+    "tonutils>=0.2",
+    # Session encryption
+    "cryptography>=44.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

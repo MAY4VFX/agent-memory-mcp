@@ -1,0 +1,31 @@
+services:
+  reranker:
+    restart: unless-stopped
+    image: ghcr.io/huggingface/text-embeddings-inference:turing-latest
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--port", "8001"]
+    ports:
+      - "8003:8001"
+    volumes:
+      - reranker_models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - dokploy-network
+
+volumes:
+  reranker_models:
+
+networks:
+  dokploy-network:
+    external: true
