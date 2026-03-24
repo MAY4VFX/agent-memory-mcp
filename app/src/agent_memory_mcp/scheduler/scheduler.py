@@ -45,6 +45,18 @@ class SyncScheduler:
         # Track domains currently being synced to prevent duplicate tasks
         self._syncing_domains: set = set()
 
+    async def _get_collector_for_domain(self, domain: dict):
+        """Get a Telethon client for a domain: global collector or user's session from pool."""
+        if self._collector:
+            return self._collector
+        # Fallback: try per-user collector from pool
+        from agent_memory_mcp.collector.pool import collector_pool
+        if collector_pool:
+            uc = await collector_pool.get_collector(domain["owner_id"])
+            if uc:
+                return uc.client
+        return None
+
     async def start(self) -> None:
         self._running = True
         log.info("scheduler_started", interval=settings.scheduler_check_interval)
@@ -192,10 +204,23 @@ class SyncScheduler:
         domain_id = domain["id"]
         log.info("incremental_sync_start", domain_id=str(domain_id))
 
-        if not self._collector:
-            log.error("no_collector", domain_id=str(domain_id))
+        collector = await self._get_collector_for_domain(domain)
+        if not collector:
+            log.error("no_collector", domain_id=str(domain_id), owner_id=domain.get("owner_id"))
             self._syncing_domains.discard(domain_id)
             return
+
+        # Determine if collector is a raw TelegramClient (from pool) or TelegramCollector
+        _fetch = getattr(collector, "fetch_messages", None)
+        if not _fetch:
+            # It's a raw TelegramClient from _UserCollector — wrap fetch calls
+            from agent_memory_mcp.collector.client import TelegramCollector as _TC
+            _wrap = _TC.__new__(_TC)
+            _wrap._client = collector
+            _wrap._folder_cache = None
+            _wrap._folder_cache_ts = 0
+            _fetch = _wrap.fetch_messages
+            collector = _wrap
 
         job = await queries.create_sync_job(async_engine, domain_id, "incremental")
         try:
@@ -203,30 +228,27 @@ class SyncScheduler:
                 async_engine, job["id"], status="running", started_at=datetime.now(timezone.utc)
             )
 
-            # Fetch new messages using shared collector (serialized via semaphore)
+            # Fetch new messages (serialized via semaphore)
             min_id = domain.get("last_synced_message_id", 0) or 0
-            # Use takeout only for truly first-time sync (never synced before)
             needs_takeout = min_id == 0 and not domain.get("last_synced_at")
-            # When fetching from scratch (min_id=0), respect sync_depth
             since_date = None
             if min_id == 0 and domain.get("sync_depth"):
                 since_date = _depth_to_date(domain["sync_depth"])
             async with self._fetch_semaphore:
-                msgs = await self._collector.fetch_messages(
+                msgs = await collector.fetch_messages(
                     channel_id=domain["channel_id"],
                     min_id=min_id,
                     since_date=since_date,
                     channel_username=domain.get("channel_username"),
                     use_takeout=needs_takeout,
                 )
-                # First-time sync with depth filter got 0 msgs — retry without date limit
                 if not msgs and min_id == 0 and since_date is not None:
                     log.info(
                         "first_sync_empty_widening",
                         domain_id=str(domain_id),
                         sync_depth=domain.get("sync_depth"),
                     )
-                    msgs = await self._collector.fetch_messages(
+                    msgs = await collector.fetch_messages(
                         channel_id=domain["channel_id"],
                         min_id=0,
                         channel_username=domain.get("channel_username"),

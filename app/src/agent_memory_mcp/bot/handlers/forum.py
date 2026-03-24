@@ -47,8 +47,10 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    """Handle /start — welcome message, offer to create API key."""
+    """Handle /start — welcome + check Telegram auth + offer API key."""
     user_id = message.from_user.id
+
+    from agent_memory_mcp.db import queries as db_q
 
     from sqlalchemy import text
     async with async_engine.begin() as conn:
@@ -56,7 +58,10 @@ async def cmd_start(message: Message):
             text("SELECT key_prefix, credits_balance FROM api_keys WHERE telegram_id = :tid AND is_active = true LIMIT 1"),
             {"tid": user_id},
         )
-        existing = row.mappings().first()
+        existing_key = row.mappings().first()
+
+    # Check Telegram session
+    tg_session = await db_q.get_telegram_session(async_engine, user_id)
 
     await message.answer(
         "🧠 <b>Agent Memory MCP</b>\n\n"
@@ -68,25 +73,38 @@ async def cmd_start(message: Message):
         "• Digests — key topics and highlights for any period\n"
         "• Decisions — extract decisions, action items, open questions\n"
         "• Context — build knowledge packages for agent tasks\n\n"
-        "<b>How to connect:</b>\n"
-        "1. Create an API key (🔑 button below)\n"
-        "2. Connect to your agent via MCP or REST API\n"
-        "3. Start a new thread here to try it out\n\n"
         "Use the buttons below to manage your account ⬇️",
         reply_markup=main_menu_kb(),
     )
 
-    if existing:
+    # Step 1: Telegram auth — required for everything
+    if not tg_session:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Connect Telegram", callback_data="connect_telegram")],
+        ])
         await message.answer(
-            f"Welcome back! Balance: <b>{existing['credits_balance']}</b> credits.",
+            "⚡️ <b>First step — connect your Telegram account</b>\n\n"
+            "This lets the service read your channels and groups.\n"
+            "Without it, sources can't be synced.\n\n"
+            "It takes 30 seconds: share contact → enter code.",
+            reply_markup=kb,
+        )
+    else:
+        await message.answer("📱 Telegram: <b>connected</b> ✅")
+
+    # Step 2: API key
+    if existing_key:
+        await message.answer(
+            f"🔑 API key: <code>{existing_key['key_prefix']}...</code>\n"
+            f"💰 Balance: <b>{existing_key['credits_balance']}</b> credits",
         )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔑 Create API Key", callback_data="create_first_key")],
         ])
         await message.answer(
-            "You don't have an API key yet. Create one now?\n"
-            f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus credits to start.",
+            "🔑 <b>Create an API key</b> to connect your agents.\n"
+            f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus credits.",
             reply_markup=kb,
         )
 
@@ -175,7 +193,23 @@ async def btn_balance(message: Message):
 @router.message(F.text == "📡 Sources")
 async def btn_sources(message: Message):
     """Show connected sources."""
+    from agent_memory_mcp.db import queries as db_q
     from agent_memory_mcp.memory_api.service import list_sources
+
+    # Check Telegram auth first
+    tg_session = await db_q.get_telegram_session(async_engine, message.from_user.id)
+    if not tg_session:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Connect Telegram", callback_data="connect_telegram")],
+        ])
+        await message.answer(
+            "📡 <b>Sources</b>\n\n"
+            "⚠️ Telegram not connected.\n"
+            "Connect first to add and sync sources.",
+            reply_markup=kb,
+        )
+        return
+
     sources = await list_sources(message.from_user.id)
 
     if not sources:
@@ -183,7 +217,8 @@ async def btn_sources(message: Message):
             "📡 <b>Sources</b>\n\n"
             "No sources connected yet.\n\n"
             "💡 To add one, write in a new thread:\n"
-            "\"Connect channel @example for 3 months\""
+            "\"Connect channel @example for 3 months\"\n"
+            "Or use MCP tool: add_source(handle=\"@example\")"
         )
         return
 
@@ -192,7 +227,9 @@ async def btn_sources(message: Message):
         name = f"@{s['channel_username']}" if s.get("channel_username") else s.get("display_name", "?")
         count = s.get("message_count", 0)
         depth = s.get("sync_depth") or "?"
-        lines.append(f"{i}. {name} — {count} messages")
+        synced = s.get("last_synced")
+        status = f"synced {synced}" if synced else "pending"
+        lines.append(f"{i}. {name} — {count} msgs ({status})")
         lines.append(f"   Depth: {depth}")
     lines.append("\n💡 To add: write in a thread \"Connect channel @...\"")
     await message.answer("\n".join(lines))

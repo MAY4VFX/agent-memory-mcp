@@ -17,6 +17,7 @@ from fastmcp import FastMCP, Context
 
 from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.memory_api.auth import get_api_key_by_hash, CREDIT_COSTS
+from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db.engine import async_engine
 
 log = structlog.get_logger(__name__)
@@ -156,6 +157,56 @@ async def list_sources(ctx: Context = None) -> str:
     owner_id = await _resolve_owner(ctx)
     sources = await service.list_sources(owner_id=owner_id)
     return _ok({"sources": sources, "count": len(sources)})
+
+
+@mcp.tool()
+async def check_telegram_auth(ctx: Context = None) -> str:
+    """Check if the user has connected their Telegram account.
+
+    Returns:
+        Connection status. If not connected, includes a link to the bot for authorization.
+    """
+    owner_id = await _resolve_owner(ctx)
+    result = await service.check_telegram_auth(owner_id=owner_id)
+    return _ok(result)
+
+
+@mcp.tool()
+async def sync_status(ctx: Context = None) -> str:
+    """Check synchronization status of all connected sources.
+
+    Use this after add_source to monitor sync progress.
+    Shows status of each source: pending, running, completed, or failed.
+
+    Returns:
+        List of sources with their current sync job status and progress.
+    """
+    owner_id = await _resolve_owner(ctx)
+    result = await service.sync_status(owner_id=owner_id)
+    return _ok(result)
+
+
+@mcp.tool()
+async def remove_source(source_id: str, ctx: Context = None) -> str:
+    """Remove a connected memory source.
+
+    Args:
+        source_id: Domain ID of the source to remove (from list_sources or sync_status).
+
+    Returns:
+        Confirmation of removal.
+    """
+    owner_id = await _resolve_owner(ctx)
+    from uuid import UUID
+    try:
+        domain_id = UUID(source_id)
+    except ValueError:
+        return _ok({"status": "error", "message": "Invalid source_id format"})
+    domain = await db_q.get_domain(async_engine, domain_id)
+    if not domain or domain["owner_id"] != owner_id:
+        return _ok({"status": "error", "message": "Source not found"})
+    await db_q.delete_domain(async_engine, domain_id)
+    return _ok({"status": "removed", "channel": f"@{domain.get('channel_username', '')}"})
 
 
 @mcp.tool()
