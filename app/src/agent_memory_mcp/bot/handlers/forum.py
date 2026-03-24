@@ -1,7 +1,11 @@
-"""Forum mode router — General topic vs conversation topics.
+"""Bot native topics mode — topics in private chat with bot.
 
-General topic (thread_id=None or general) → inline keyboard (management)
-Any other topic → agent pipeline (memory chat dialog)
+Bot uses native forum topics (Bot API Dec 2025):
+- Messages without thread_id (General/default) → inline keyboard (management)
+- Messages in a topic thread → agent pipeline (memory chat dialog)
+
+Enable via @BotFather → bot settings → Topics.
+No group/supergroup needed — topics work in private chat.
 """
 
 from __future__ import annotations
