@@ -42,23 +42,45 @@ def _build_metadata(base: str) -> dict:
     }
 
 
-@router.get("/.well-known/oauth-authorization-server")
+@router.api_route("/.well-known/oauth-authorization-server", methods=["GET", "POST"])
 async def oauth_metadata(request: Request):
     """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
     base = str(request.base_url).rstrip("/")
     return JSONResponse(_build_metadata(base))
 
 
-# Also serve metadata under /mcp/ prefix (Claude Code looks here)
-@router.get("/mcp/.well-known/oauth-authorization-server")
+@router.api_route("/mcp/.well-known/oauth-authorization-server", methods=["GET", "POST"])
 async def oauth_metadata_mcp(request: Request):
     base = str(request.base_url).rstrip("/")
     return JSONResponse(_build_metadata(base))
 
 
-@router.post("/oauth/register")
+def _build_protected_resource(base: str) -> dict:
+    return {
+        "resource": f"{base}/mcp/",
+        "authorization_servers": [base],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+@router.api_route("/.well-known/oauth-protected-resource", methods=["GET", "POST"])
+async def oauth_protected_resource(request: Request):
+    """OAuth 2.0 Protected Resource Metadata (RFC 9728)."""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse(_build_protected_resource(base))
+
+
+@router.api_route("/mcp/.well-known/oauth-protected-resource", methods=["GET", "POST"])
+async def oauth_protected_resource_mcp(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse(_build_protected_resource(base))
+
+
+@router.api_route("/oauth/register", methods=["GET", "POST"])
 async def oauth_register(request: Request):
     """Dynamic Client Registration (RFC 7591)."""
+    if request.method == "GET":
+        return JSONResponse({"error": "use_post", "description": "POST with client metadata to register"})
     body = await request.json()
     client_id = f"client_{secrets.token_hex(8)}"
     client_secret = secrets.token_hex(16)
