@@ -30,9 +30,18 @@ async def main() -> None:
     milvus.migrate_collection()
     milvus.close()
 
-    # Connect Telethon (needed for channel resolution in bot)
-    collector = TelegramCollector()
-    await collector.connect()
+    # Connect Telethon (optional — needed for channel ingestion)
+    collector = None
+    if settings.telegram_session:
+        try:
+            collector = TelegramCollector()
+            await collector.connect()
+            log.info("telethon_connected")
+        except Exception:
+            log.warning("telethon_connect_failed", exc_info=True)
+            collector = None
+    else:
+        log.info("telethon_skipped", reason="no TELEGRAM_SESSION configured")
 
     # Create bot + dispatcher
     bot = create_bot()
@@ -42,7 +51,8 @@ async def main() -> None:
     dp["collector"] = collector
 
     # Warm up folder cache in background
-    asyncio.create_task(collector.get_dialog_filters(), name="warmup_folders")
+    if collector:
+        asyncio.create_task(collector.get_dialog_filters(), name="warmup_folders")
 
     # Start scheduler with shared collector and bot (for digest)
     scheduler = SyncScheduler(collector=collector, bot=bot)
@@ -84,7 +94,8 @@ async def main() -> None:
         api_task.cancel()
         scheduler.stop()
         scheduler_task.cancel()
-        await collector.disconnect()
+        if collector:
+            await collector.disconnect()
         await bot.session.close()
         log.info("agent_memory_mcp_stopped")
 
