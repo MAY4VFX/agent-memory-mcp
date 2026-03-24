@@ -29,11 +29,8 @@ _clients: dict[str, dict] = {}
 AUTH_CODE_TTL = 300  # 5 minutes
 
 
-@router.get("/.well-known/oauth-authorization-server")
-async def oauth_metadata(request: Request):
-    """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
-    base = str(request.base_url).rstrip("/")
-    return JSONResponse({
+def _build_metadata(base: str) -> dict:
+    return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
         "token_endpoint": f"{base}/oauth/token",
@@ -42,7 +39,21 @@ async def oauth_metadata(request: Request):
         "grant_types_supported": ["authorization_code"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
         "code_challenge_methods_supported": ["S256", "plain"],
-    })
+    }
+
+
+@router.get("/.well-known/oauth-authorization-server")
+async def oauth_metadata(request: Request):
+    """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse(_build_metadata(base))
+
+
+# Also serve metadata under /mcp/ prefix (Claude Code looks here)
+@router.get("/mcp/.well-known/oauth-authorization-server")
+async def oauth_metadata_mcp(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse(_build_metadata(base))
 
 
 @router.post("/oauth/register")
