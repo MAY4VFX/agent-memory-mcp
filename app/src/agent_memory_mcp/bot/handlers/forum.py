@@ -36,9 +36,9 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     """Persistent reply keyboard at the bottom of the screen."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="📡 Источники")],
-            [KeyboardButton(text="🔑 API Keys"), KeyboardButton(text="💎 Пополнить")],
-            [KeyboardButton(text="📊 Usage"), KeyboardButton(text="❓ Помощь")],
+            [KeyboardButton(text="💰 Balance"), KeyboardButton(text="📡 Sources")],
+            [KeyboardButton(text="🔑 API Keys"), KeyboardButton(text="💎 Top Up")],
+            [KeyboardButton(text="📊 Usage"), KeyboardButton(text="❓ Help")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -58,38 +58,35 @@ async def cmd_start(message: Message):
         )
         existing = row.mappings().first()
 
-    # Welcome message — always show
     await message.answer(
         "🧠 <b>Agent Memory MCP</b>\n\n"
-        "Память для AI-агентов на базе Telegram.\n\n"
-        "Мы превращаем историю твоих чатов, каналов и папок "
-        "в структурированную долгосрочную память, которую может "
-        "использовать любой AI-агент.\n\n"
-        "<b>Что умеет:</b>\n"
-        "• Поиск по памяти — найти что угодно в истории чатов\n"
-        "• Дайджесты — ключевые темы за период\n"
-        "• Решения — извлечь принятые решения и задачи\n"
-        "• Контекст — собрать пакет знаний для агента\n\n"
-        "<b>Как подключить:</b>\n"
-        "1. Создай API key (кнопка 🔑 внизу)\n"
-        "2. Подключи к своему агенту через MCP или REST API\n"
-        "3. Создай новый тред здесь, чтобы попробовать\n\n"
-        "Управление — кнопки внизу ⬇️",
+        "Long-term memory for Telegram-native AI agents.\n\n"
+        "We turn your chats, channels, and folders into structured "
+        "persistent memory that any AI agent can use.\n\n"
+        "<b>What it does:</b>\n"
+        "• Memory search — find anything across chat history\n"
+        "• Digests — key topics and highlights for any period\n"
+        "• Decisions — extract decisions, action items, open questions\n"
+        "• Context — build knowledge packages for agent tasks\n\n"
+        "<b>How to connect:</b>\n"
+        "1. Create an API key (🔑 button below)\n"
+        "2. Connect to your agent via MCP or REST API\n"
+        "3. Start a new thread here to try it out\n\n"
+        "Use the buttons below to manage your account ⬇️",
         reply_markup=main_menu_kb(),
     )
 
     if existing:
         await message.answer(
-            f"С возвращением! Баланс: <b>{existing['credits_balance']}</b> кредитов.",
+            f"Welcome back! Balance: <b>{existing['credits_balance']}</b> credits.",
         )
     else:
-        # Offer to create API key
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔑 Создать API key", callback_data="create_first_key")],
+            [InlineKeyboardButton(text="🔑 Create API Key", callback_data="create_first_key")],
         ])
         await message.answer(
-            "У тебя ещё нет API ключа. Создать сейчас?\n"
-            f"Получишь <b>{settings.welcome_bonus_credits}</b> бонусных кредитов.",
+            "You don't have an API key yet. Create one now?\n"
+            f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus credits to start.",
             reply_markup=kb,
         )
 
@@ -99,7 +96,6 @@ async def cb_create_first_key(callback: CallbackQuery):
     """Create first API key, show it once, then delete the message."""
     user_id = callback.from_user.id
 
-    # Check if already created (double-click protection)
     from sqlalchemy import text
     async with async_engine.begin() as conn:
         row = await conn.execute(
@@ -107,7 +103,7 @@ async def cb_create_first_key(callback: CallbackQuery):
             {"tid": user_id},
         )
         if row.first():
-            await callback.answer("Ключ уже создан!", show_alert=True)
+            await callback.answer("Key already created!", show_alert=True)
             return
 
     full_key, rec = await create_api_key_for_user(
@@ -116,16 +112,14 @@ async def cb_create_first_key(callback: CallbackQuery):
         bonus_credits=settings.welcome_bonus_credits,
     )
 
-    # Show key in a temporary message
     key_msg = await callback.message.edit_text(
-        f"🔑 <b>Твой API key:</b>\n\n"
+        f"🔑 <b>Your API key:</b>\n\n"
         f"<code>{full_key}</code>\n\n"
-        f"Баланс: <b>{rec['credits_balance']}</b> кредитов\n\n"
-        "⚠️ <b>Скопируй и сохрани!</b> Это сообщение удалится через 60 секунд.",
+        f"Balance: <b>{rec['credits_balance']}</b> credits\n\n"
+        "⚠️ <b>Copy and save it!</b> This message will be deleted in 60 seconds.",
     )
     await callback.answer()
 
-    # Auto-delete after 60 seconds
     import asyncio
     await asyncio.sleep(60)
     try:
@@ -136,7 +130,7 @@ async def cb_create_first_key(callback: CallbackQuery):
 
 # --- Reply keyboard button handlers ---
 
-@router.message(F.text == "💰 Баланс")
+@router.message(F.text == "💰 Balance")
 async def btn_balance(message: Message):
     """Show balance and recent transactions."""
     user_id = message.from_user.id
@@ -148,7 +142,7 @@ async def btn_balance(message: Message):
         )
         key = row.mappings().first()
         if not key:
-            await message.answer("Нет API ключа. Нажми /start")
+            await message.answer("No API key found. Press /start")
             return
 
         rows = await conn.execute(
@@ -162,10 +156,10 @@ async def btn_balance(message: Message):
         txs = rows.mappings().all()
 
     lines = [
-        f"💰 <b>Баланс: {key['credits_balance']} кредитов</b>",
-        f"Потрачено всего: {key['total_credits_used']}",
+        f"💰 <b>Balance: {key['credits_balance']} credits</b>",
+        f"Total spent: {key['total_credits_used']}",
         "",
-        "<b>Последние операции:</b>",
+        "<b>Recent transactions:</b>",
     ]
     for tx in txs:
         sign = "+" if tx["amount"] > 0 else ""
@@ -173,12 +167,12 @@ async def btn_balance(message: Message):
         dt = tx["created_at"].strftime("%d.%m %H:%M") if tx["created_at"] else ""
         lines.append(f" {sign}{tx['amount']}  {ep}  {dt}")
     if not txs:
-        lines.append(" Пока нет операций")
+        lines.append(" No transactions yet")
 
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text == "📡 Источники")
+@router.message(F.text == "📡 Sources")
 async def btn_sources(message: Message):
     """Show connected sources."""
     from agent_memory_mcp.memory_api.service import list_sources
@@ -186,21 +180,21 @@ async def btn_sources(message: Message):
 
     if not sources:
         await message.answer(
-            "📡 <b>Источники</b>\n\n"
-            "Пока нет подключённых источников.\n\n"
-            "💡 Чтобы добавить, напиши в новом треде:\n"
-            "«Подключи канал @example за 3 месяца»"
+            "📡 <b>Sources</b>\n\n"
+            "No sources connected yet.\n\n"
+            "💡 To add one, write in a new thread:\n"
+            "\"Connect channel @example for 3 months\""
         )
         return
 
-    lines = ["📡 <b>Подключённые источники:</b>\n"]
+    lines = ["📡 <b>Connected sources:</b>\n"]
     for i, s in enumerate(sources, 1):
         name = f"@{s['channel_username']}" if s.get("channel_username") else s.get("display_name", "?")
         count = s.get("message_count", 0)
         depth = s.get("sync_depth") or "?"
-        lines.append(f"{i}. {name} — {count} сообщений")
-        lines.append(f"   Глубина: {depth}")
-    lines.append("\n💡 Добавить: напиши в треде «Подключи канал @...»")
+        lines.append(f"{i}. {name} — {count} messages")
+        lines.append(f"   Depth: {depth}")
+    lines.append("\n💡 To add: write in a thread \"Connect channel @...\"")
     await message.answer("\n".join(lines))
 
 
@@ -220,16 +214,16 @@ async def btn_keys(message: Message):
         keys = rows.mappings().all()
 
     if not keys:
-        await message.answer("Нет ключей. Нажми /start")
+        await message.answer("No keys found. Press /start")
         return
 
-    lines = ["🔑 <b>Твои API ключи:</b>\n"]
+    lines = ["🔑 <b>Your API keys:</b>\n"]
     for i, k in enumerate(keys, 1):
         status = "✅" if k["is_active"] else "❌"
         last = k["last_used_at"].strftime("%d.%m %H:%M") if k.get("last_used_at") else "—"
         lines.append(f"{i}. <code>{k['key_prefix']}...</code> ({k['name']}) {status}")
-        lines.append(f"   Баланс: {k['credits_balance']} • Последнее: {last}")
-    lines.append("\nНовый ключ: /newkey")
+        lines.append(f"   Balance: {k['credits_balance']} • Last used: {last}")
+    lines.append("\nNew key: /newkey")
     await message.answer("\n".join(lines))
 
 
@@ -245,15 +239,22 @@ async def cmd_newkey(message: Message):
         )
         count = row.scalar()
     if count >= 5:
-        await message.answer("Максимум 5 ключей на аккаунт.")
+        await message.answer("Maximum 5 keys per account.")
         return
 
     full_key, rec = await create_api_key_for_user(async_engine, user_id, name=f"key-{count + 1}")
-    await message.answer(
-        f"🔑 <b>Новый ключ создан:</b>\n\n"
+    key_msg = await message.answer(
+        f"🔑 <b>New key created:</b>\n\n"
         f"<code>{full_key}</code>\n\n"
-        "⚠️ Сохрани — больше не покажу!"
+        "⚠️ <b>Copy and save!</b> This message will be deleted in 60 seconds."
     )
+
+    import asyncio
+    await asyncio.sleep(60)
+    try:
+        await key_msg.delete()
+    except Exception:
+        pass
 
 
 @router.message(F.text == "📊 Usage")
@@ -268,7 +269,7 @@ async def btn_usage(message: Message):
         )
         key = row.mappings().first()
         if not key:
-            await message.answer("Нет API ключа.")
+            await message.answer("No API key found.")
             return
 
         rows = await conn.execute(
@@ -283,36 +284,36 @@ async def btn_usage(message: Message):
         )
         stats = rows.mappings().all()
 
-    lines = ["📊 <b>Статистика за сегодня:</b>\n"]
+    lines = ["📊 <b>Usage today:</b>\n"]
     total_req = 0
     total_cr = 0
     for s in stats:
         ep = s["endpoint"] or "?"
-        lines.append(f"  {ep}: {s['cnt']} запросов ({s['total_credits']} кр.)")
+        lines.append(f"  {ep}: {s['cnt']} requests ({s['total_credits']} cr.)")
         total_req += s["cnt"]
         total_cr += s["total_credits"]
     if not stats:
-        lines.append("  Нет запросов за сегодня")
+        lines.append("  No requests today")
     else:
-        lines.append(f"\n  Итого: {total_req} запросов ({total_cr} кр.)")
+        lines.append(f"\n  Total: {total_req} requests ({total_cr} cr.)")
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text == "❓ Помощь")
+@router.message(F.text == "❓ Help")
 async def btn_help(message: Message):
     """Show help / integration guide."""
     await message.answer(
-        "❓ <b>Как подключить Agent Memory MCP</b>\n\n"
+        "❓ <b>How to connect Agent Memory MCP</b>\n\n"
         "📎 <b>MCP (Claude Desktop / Cursor):</b>\n"
         "<code>pip install agent-memory-mcp</code>\n\n"
         "📎 <b>REST API:</b>\n"
         "<code>Authorization: Bearer YOUR_API_KEY</code>\n"
         "<code>POST /api/v1/memory/search</code>\n\n"
-        "📎 <b>MCP tools:</b>\n"
-        "• search_memory — поиск по памяти\n"
-        "• get_digest — дайджест за период\n"
-        "• get_decisions — решения и задачи\n"
-        "• add_source — подключить канал\n"
-        "• list_sources — список источников\n"
-        "• get_agent_context — контекст для агента"
+        "📎 <b>Available MCP tools:</b>\n"
+        "• search_memory — search across chat history\n"
+        "• get_digest — digest for a time period\n"
+        "• get_decisions — decisions and action items\n"
+        "• add_source — connect a channel\n"
+        "• list_sources — list connected sources\n"
+        "• get_agent_context — context package for agent tasks"
     )
