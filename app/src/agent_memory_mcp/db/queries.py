@@ -14,6 +14,7 @@ from agent_memory_mcp.db.tables import (
     hashtag_summaries,
     messages,
     sync_jobs,
+    telegram_sessions,
     threads,
     users,
 )
@@ -915,6 +916,84 @@ async def get_domains_needing_pipeline(engine: AsyncEngine) -> list[dict]:
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Telegram Sessions
+# ---------------------------------------------------------------------------
+
+async def save_telegram_session(
+    engine: AsyncEngine,
+    telegram_id: int,
+    session_data: bytes,
+    phone_hash: str | None = None,
+) -> dict:
+    """Save or update encrypted Telethon session for a user."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    stmt = (
+        pg_insert(telegram_sessions)
+        .values(
+            telegram_id=telegram_id,
+            session_data=session_data,
+            phone_hash=phone_hash,
+            is_active=True,
+        )
+        .on_conflict_do_update(
+            index_elements=[telegram_sessions.c.telegram_id],
+            set_={
+                "session_data": session_data,
+                "phone_hash": phone_hash,
+                "is_active": True,
+                "connected_at": func.now(),
+            },
+        )
+        .returning(*telegram_sessions.c)
+    )
+    async with engine.begin() as conn:
+        row = (await conn.execute(stmt)).mappings().one()
+        return dict(row)
+
+
+async def get_telegram_session(
+    engine: AsyncEngine,
+    telegram_id: int,
+) -> dict | None:
+    """Get active Telethon session for a user."""
+    stmt = select(telegram_sessions).where(
+        telegram_sessions.c.telegram_id == telegram_id,
+        telegram_sessions.c.is_active.is_(True),
+    )
+    async with engine.begin() as conn:
+        row = (await conn.execute(stmt)).mappings().one_or_none()
+        return dict(row) if row else None
+
+
+async def deactivate_telegram_session(
+    engine: AsyncEngine,
+    telegram_id: int,
+) -> None:
+    """Deactivate a user's Telethon session."""
+    stmt = (
+        update(telegram_sessions)
+        .where(telegram_sessions.c.telegram_id == telegram_id)
+        .values(is_active=False)
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
+
+
+async def touch_telegram_session(
+    engine: AsyncEngine,
+    telegram_id: int,
+) -> None:
+    """Update last_used_at for a session."""
+    stmt = (
+        update(telegram_sessions)
+        .where(telegram_sessions.c.telegram_id == telegram_id)
+        .values(last_used_at=func.now())
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
 
 
 async def update_sync_job(

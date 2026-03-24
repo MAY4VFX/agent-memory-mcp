@@ -28,8 +28,10 @@ def create_dispatcher() -> Dispatcher:
     # --- Forum mode handlers (priority) ---
     from agent_memory_mcp.bot.handlers.forum import router as forum_router
     from agent_memory_mcp.bot.handlers.wallet import router as wallet_router
+    from agent_memory_mcp.bot.handlers.auth import router as auth_router
 
     dp.include_router(forum_router)    # /start, main menu, sources, help
+    dp.include_router(auth_router)     # Telegram account auth (Telethon multi-session)
     dp.include_router(wallet_router)   # balance, topup, API keys, usage
 
     # --- Legacy handlers (kept for admin/operator use) ---
