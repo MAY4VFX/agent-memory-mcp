@@ -32,11 +32,12 @@ log = structlog.get_logger(__name__)
 router = Router()
 
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    """Persistent reply keyboard at the bottom of the screen."""
+def main_menu_kb(telegram_connected: bool = False) -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard. Shows 📱 Connect or 📡 Sources depending on auth."""
+    source_btn = KeyboardButton(text="📡 Sources") if telegram_connected else KeyboardButton(text="📱 Connect Telegram")
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="💰 Balance"), KeyboardButton(text="📡 Sources")],
+            [KeyboardButton(text="💰 Balance"), source_btn],
             [KeyboardButton(text="🔑 API Keys"), KeyboardButton(text="💎 Top Up")],
             [KeyboardButton(text="📊 Usage"), KeyboardButton(text="❓ Help")],
         ],
@@ -63,34 +64,26 @@ async def cmd_start(message: Message):
     # Check Telegram session
     tg_session = await db_q.get_telegram_session(async_engine, user_id)
 
+    is_connected = bool(tg_session)
+
+    status_parts = []
+    if is_connected:
+        status_parts.append("📱 Telegram: <b>connected</b> ✅")
+    else:
+        status_parts.append(
+            "📱 Telegram: <b>not connected</b>\n"
+            "Press <b>📱 Connect Telegram</b> below to get started."
+        )
+
     await message.answer(
         "🧠 <b>Agent Memory MCP</b>\n\n"
         "Long-term memory for Telegram-native AI agents.\n\n"
         "We turn your chats, channels, and folders into structured "
         "persistent memory that any AI agent can use.\n\n"
-        "<b>What it does:</b>\n"
-        "• Memory search — find anything across chat history\n"
-        "• Digests — key topics and highlights for any period\n"
-        "• Decisions — extract decisions, action items, open questions\n"
-        "• Context — build knowledge packages for agent tasks\n\n"
+        + "\n".join(status_parts) + "\n\n"
         "Use the buttons below to manage your account ⬇️",
-        reply_markup=main_menu_kb(),
+        reply_markup=main_menu_kb(telegram_connected=is_connected),
     )
-
-    # Step 1: Telegram auth — required for everything
-    if not tg_session:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📱 Connect Telegram", callback_data="connect_telegram")],
-        ])
-        await message.answer(
-            "⚡️ <b>First step — connect your Telegram account</b>\n\n"
-            "This lets the service read your channels and groups.\n"
-            "Without it, sources can't be synced.\n\n"
-            "It takes 30 seconds: share contact → enter code.",
-            reply_markup=kb,
-        )
-    else:
-        await message.answer("📱 Telegram: <b>connected</b> ✅")
 
     # Step 2: API key
     if existing_key:
@@ -193,22 +186,7 @@ async def btn_balance(message: Message):
 @router.message(F.text == "📡 Sources")
 async def btn_sources(message: Message):
     """Show connected sources."""
-    from agent_memory_mcp.db import queries as db_q
     from agent_memory_mcp.memory_api.service import list_sources
-
-    # Check Telegram auth first
-    tg_session = await db_q.get_telegram_session(async_engine, message.from_user.id)
-    if not tg_session:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📱 Connect Telegram", callback_data="connect_telegram")],
-        ])
-        await message.answer(
-            "📡 <b>Sources</b>\n\n"
-            "⚠️ Telegram not connected.\n"
-            "Connect first to add and sync sources.",
-            reply_markup=kb,
-        )
-        return
 
     sources = await list_sources(message.from_user.id)
 
