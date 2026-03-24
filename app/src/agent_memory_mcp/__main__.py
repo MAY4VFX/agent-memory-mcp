@@ -14,6 +14,8 @@ import uvicorn
 
 from agent_memory_mcp.bot.app import create_bot, create_dispatcher
 from agent_memory_mcp.collector.client import TelegramCollector
+from agent_memory_mcp.collector import pool as pool_mod
+from agent_memory_mcp.collector.pool import CollectorPool
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.memory_api.app import create_api_app
 from agent_memory_mcp.scheduler.scheduler import SyncScheduler
@@ -43,12 +45,19 @@ async def main() -> None:
     else:
         log.info("telethon_skipped", reason="no TELEGRAM_SESSION configured")
 
+    # Initialize collector pool (multi-user Telethon sessions from DB)
+    cpool = CollectorPool()
+    await cpool.start()
+    pool_mod.collector_pool = cpool  # set module-level singleton
+    log.info("collector_pool_started")
+
     # Create bot + dispatcher
     bot = create_bot()
     dp = create_dispatcher()
 
-    # Store collector in dispatcher workflow data for handler injection
+    # Store collector and pool in dispatcher workflow data for handler injection
     dp["collector"] = collector
+    dp["collector_pool"] = cpool
 
     # Warm up folder cache in background
     if collector:
@@ -96,6 +105,7 @@ async def main() -> None:
         scheduler_task.cancel()
         if collector:
             await collector.disconnect()
+        await cpool.shutdown()
         await bot.session.close()
         log.info("agent_memory_mcp_stopped")
 

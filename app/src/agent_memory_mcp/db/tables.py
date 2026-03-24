@@ -19,6 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy import LargeBinary
 
 metadata = MetaData()
 
@@ -364,6 +365,17 @@ digest_runs = Table(
     Column("started_at", DateTime(timezone=True)),
     Column("completed_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
+)
+
+telegram_sessions = Table(
+    "telegram_sessions",
+    metadata,
+    Column("telegram_id", BigInteger, ForeignKey("users.telegram_id"), primary_key=True),
+    Column("session_data", LargeBinary, nullable=False),  # AES-encrypted StringSession
+    Column("phone_hash", String(64)),
+    Column("is_active", Boolean, server_default="true", nullable=False),
+    Column("connected_at", DateTime(timezone=True), server_default=text("now()")),
+    Column("last_used_at", DateTime(timezone=True)),
 )
 
 sync_jobs = Table(
