@@ -97,12 +97,15 @@ async def get_digest(
     req: S.GetDigestRequest,
     api_key: dict = Depends(require_credits("digest")),
 ):
-    result = await service.get_digest(
+    """Start digest generation as async job. Returns job_id — poll GET /jobs/{id}."""
+    from agent_memory_mcp.memory_api.jobs import create_job
+    coro = service.get_digest(
         owner_id=api_key["telegram_id"],
         scope=req.scope,
         period=req.period,
     )
-    return {**result, "points_used": CREDIT_COSTS["digest"], "balance": api_key["credits_balance"]}
+    job_id = create_job(coro, owner_id=api_key["telegram_id"])
+    return {"job_id": job_id, "status": "running", "points_used": CREDIT_COSTS["digest"]}
 
 
 @router.post("/decisions")
@@ -110,12 +113,26 @@ async def get_decisions(
     req: S.GetDecisionsRequest,
     api_key: dict = Depends(require_credits("decisions")),
 ):
-    result = await service.get_decisions(
+    """Start decisions extraction as async job. Returns job_id — poll GET /jobs/{id}."""
+    from agent_memory_mcp.memory_api.jobs import create_job
+    coro = service.get_decisions(
         owner_id=api_key["telegram_id"],
         scope=req.scope,
         topic=req.topic,
     )
-    return {**result, "points_used": CREDIT_COSTS["decisions"], "balance": api_key["credits_balance"]}
+    job_id = create_job(coro, owner_id=api_key["telegram_id"])
+    return {"job_id": job_id, "status": "running", "points_used": CREDIT_COSTS["decisions"]}
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str, api_key: dict = Depends(verify_api_key)):
+    """Poll job status. Returns result when completed."""
+    from agent_memory_mcp.memory_api.jobs import get_job
+    from fastapi import HTTPException
+    result = get_job(job_id)
+    if not result:
+        raise HTTPException(404, "Job not found or expired")
+    return result
 
 
 @router.post("/memory/context")
