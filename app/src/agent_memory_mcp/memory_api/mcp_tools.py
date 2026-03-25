@@ -85,7 +85,7 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10, c
 
     Args:
         query: What to search for in the memory.
-        scope: Optional scope — @channel_username or domain_id. If omitted, searches all sources.
+        scope: Optional scope. "@username" for one channel, "folder:Name" for a folder, or omit for all sources.
         limit: Maximum number of source references to return (default 10).
 
     Returns:
@@ -101,7 +101,7 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     """Get a digest of Telegram conversations for a period.
 
     Args:
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "@username", "folder:Name", or domain_id.
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
 
     Returns:
@@ -117,7 +117,7 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
     """Extract decisions, action items, and open questions from conversations.
 
     Args:
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "@username", "folder:Name", or domain_id.
         topic: Optional topic to filter decisions by.
 
     Returns:
@@ -236,7 +236,7 @@ async def get_agent_context(task: str, scope: str, ctx: Context = None) -> str:
 
     Args:
         task: Description of what the agent needs to accomplish.
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "@username", "folder:Name", or domain_id.
 
     Returns:
         Structured context package with all relevant information.
