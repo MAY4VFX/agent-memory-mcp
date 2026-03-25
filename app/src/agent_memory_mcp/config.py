@@ -100,8 +100,8 @@ class Settings(BaseSettings):
     ton_api_url: str = "https://toncenter.com/api/v3"
     ton_api_key: str = ""
     ton_manifest_url: str = ""
-    credits_per_ton: int = 1000
-    welcome_bonus_credits: int = 500
+    credits_per_ton: int = 330  # 1 TON ≈ $3.30, 1 point ≈ $0.01
+    welcome_bonus_credits: int = 100  # ~$1 worth, ~33 searches
 
     # --- Session encryption ---
     session_encryption_key: str = ""

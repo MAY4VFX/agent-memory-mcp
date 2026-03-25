@@ -91,7 +91,7 @@ async def cmd_start(message: Message):
     if existing_key:
         await message.answer(
             f"🔑 API key: <code>{existing_key['key_prefix']}...</code>\n"
-            f"💰 Balance: <b>{existing_key['credits_balance']}</b> credits",
+            f"💰 Balance: <b>{existing_key['credits_balance']}</b> points",
         )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -99,7 +99,7 @@ async def cmd_start(message: Message):
         ])
         await message.answer(
             "🔑 <b>Create an API key</b> to connect your agents.\n"
-            f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus credits.",
+            f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus points.",
             reply_markup=kb,
         )
 
@@ -128,7 +128,7 @@ async def cb_create_first_key(callback: CallbackQuery):
     key_msg = await callback.message.edit_text(
         f"🔑 <b>Your API key:</b>\n\n"
         f"<code>{full_key}</code>\n\n"
-        f"Balance: <b>{rec['credits_balance']}</b> credits\n\n"
+        f"Balance: <b>{rec['credits_balance']}</b> points\n\n"
         "⚠️ <b>Copy and save it!</b> This message will be deleted in 60 seconds.",
     )
     await callback.answer()
@@ -169,7 +169,7 @@ async def btn_balance(message: Message):
         txs = rows.mappings().all()
 
     lines = [
-        f"💰 <b>Balance: {key['credits_balance']} credits</b>",
+        f"💰 <b>Balance: {key['credits_balance']} points</b>",
         f"Total spent: {key['total_credits_used']}",
         "",
         "<b>Recent transactions:</b>",
@@ -475,8 +475,8 @@ async def cb_key_view(callback: CallbackQuery):
     text_msg = (
         f"🔑 <b>{k['name']}</b>\n\n"
         f"Prefix: <code>{k['key_prefix']}...</code>\n"
-        f"Balance: <b>{k['credits_balance']}</b> credits\n"
-        f"Spent: {k['total_credits_used']} credits\n"
+        f"Balance: <b>{k['credits_balance']}</b> points\n"
+        f"Spent: {k['total_credits_used']} points\n"
         f"Created: {created}\n"
         f"Last used: {last_used}"
     )
@@ -600,7 +600,7 @@ async def btn_usage(message: Message):
     total_cr = 0
     for s in stats:
         ep = s["endpoint"] or "?"
-        lines.append(f"  {ep}: {s['cnt']} requests ({s['total_credits']} cr.)")
+        lines.append(f"  {ep}: {s['cnt']} requests ({s['total_credits']} pts)")
         total_req += s["cnt"]
         total_cr += s["total_credits"]
     if not stats:

@@ -125,8 +125,8 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_digest(owner_id=owner_id, scope=scope, period=period)
-    await _charge(ctx, 10, "digest")
-    return _ok(result, credits_used=10)
+    await _charge(ctx, 25, "digest")
+    return _ok(result, credits_used=25)
 
 
 @mcp.tool()
@@ -142,8 +142,8 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_decisions(owner_id=owner_id, scope=scope, topic=topic)
-    await _charge(ctx, 5, "decisions")
-    return _ok(result, credits_used=5)
+    await _charge(ctx, 12, "decisions")
+    return _ok(result, credits_used=12)
 
 
 @mcp.tool()
@@ -166,8 +166,7 @@ async def add_source(handle: str, source_type: str = "channel", sync_range: str 
     result = await service.add_source(
         owner_id=owner_id, handle=handle, source_type=source_type, sync_range=sync_range,
     )
-    await _charge(ctx, 5, "add_source")
-    return _ok(result, credits_used=5)
+    return _ok(result)
 
 
 @mcp.tool()
@@ -262,5 +261,5 @@ async def get_agent_context(task: str, scope: str, ctx: Context = None) -> str:
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_agent_context(owner_id=owner_id, task=task, scope=scope)
-    await _charge(ctx, 10, "agent_context")
-    return _ok(result, credits_used=10)
+    await _charge(ctx, 15, "agent_context")
+    return _ok(result, credits_used=15)

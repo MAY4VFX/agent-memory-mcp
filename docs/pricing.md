@@ -1,45 +1,33 @@
 # Agent Memory MCP — Pricing
 
-## Credit System
+## Point System
 
-All operations cost credits. 1 TON = 1,000 credits.
+1 point ≈ $0.01. All prices include ~3x margin over LLM cost.
 
-| Operation | Credits | Description |
-|-----------|---------|-------------|
-| **Search** | 3 | Semantic + keyword search with AI-generated answer |
-| **Digest** | 10 | Period digest with clustering and map-reduce |
-| **Decisions** | 5 | Extract decisions, action items, open questions |
-| **Context Package** | 10 | Full context for agent tasks (search + decisions) |
-| **Deep Analysis** | 25 | Map-reduce over large corpus |
-| **Add Source** | 5 | Connect and sync a channel/group |
-| **Sync** | 5 | Manual re-sync trigger |
-| List Sources | Free | — |
-| Check Auth | Free | — |
-| Sync Status | Free | — |
-| Account/Balance | Free | — |
+| Operation | Points | ~USD | Description |
+|-----------|--------|------|-------------|
+| **Search** | 3 | $0.03 | Semantic + keyword search with AI answer |
+| **Decisions** | 12 | $0.12 | Extract decisions, action items, questions |
+| **Agent Context** | 15 | $0.15 | Combined search + decisions package |
+| **Digest** | 25 | $0.25 | Map-reduce digest with clustering |
+| **Deep Analysis** | 50 | $0.50 | Full corpus analysis |
+| Add Source | Free | — | Connect a channel or folder |
+| List/Status/Auth | Free | — | Management operations |
 
 ## Free Tier
 
-- **500 bonus credits** on registration (~167 searches or ~50 digests)
-- Rate limit: 60 requests/min
+- **100 bonus points** on registration (~$1, ~33 searches)
 
-## Top-Up
+## Top-Up via TON
 
-| Amount | Credits |
-|--------|---------|
-| 0.5 TON | 500 |
-| 1 TON | 1,000 |
-| 5 TON | 5,000 |
-| 10 TON | 10,000 |
+1 TON ≈ $3.30 → **330 points**
 
-Payment via TON transfer in @AgentMemoryBot → Top Up.
+| Amount | Points | ~USD value |
+|--------|--------|------------|
+| 0.5 TON | 165 | $1.65 |
+| 1 TON | 330 | $3.30 |
+| 3 TON | 990 | $9.90 |
+| 5 TON | 1,650 | $16.50 |
+| 10 TON | 3,300 | $33.00 |
 
-## Rate Limits
-
-| Tier | Rate |
-|------|------|
-| Free | 60 req/min |
-| Paid | 300 req/min |
-| Per IP (no key) | 10 req/min |
-| Max API keys per account | 5 |
-| Daily cap (free tier) | 100 credits/day |
+Payment: @AgentMemoryBot → 💎 Top Up → Tonkeeper deeplink.
