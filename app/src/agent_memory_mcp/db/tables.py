@@ -34,6 +34,8 @@ users = Table(
     Column("active_conversation_id", UUID(as_uuid=True)),
     Column("active_scope_type", String(16), server_default="domain"),
     Column("active_group_id", UUID(as_uuid=True)),
+    Column("points_balance", Integer, server_default="0", nullable=False),
+    Column("total_points_spent", Integer, server_default="0", nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
 )
 
