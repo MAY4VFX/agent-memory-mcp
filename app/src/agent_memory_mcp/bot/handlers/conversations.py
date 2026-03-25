@@ -133,12 +133,22 @@ async def handle_text_query(message: Message) -> None:
         )
         return
 
-    # Resolve scope (single domain / group / all)
+    # Resolve scope — default to ALL domains if no specific scope set
     from agent_memory_mcp.db import queries_groups as gq
     scope = await gq.resolve_scope(async_engine, user)
     if not scope.domain_ids:
-        await message.answer("Нет доступных каналов. Подключите канал через Настройки.")
-        return
+        # Fallback: try all user's domains
+        all_domains = await db_q.list_domains(async_engine, message.from_user.id)
+        if all_domains:
+            scope = gq.ScopeInfo(
+                scope_type="all",
+                domain_ids=[d["id"] for d in all_domains],
+                channel_ids=[d["channel_id"] for d in all_domains],
+                label=f"All sources ({len(all_domains)})",
+            )
+        else:
+            await message.answer("No sources connected. Add channels first via 📡 Sources or MCP.")
+            return
 
     domain_id = user.get("active_domain_id")
     domain = await db_q.get_domain(async_engine, domain_id) if domain_id else None

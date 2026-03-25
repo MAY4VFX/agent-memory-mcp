@@ -79,7 +79,7 @@ async def _start_auth_flow(message: Message, state: FSMContext) -> None:
     await state.set_state(AuthStates.waiting_contact)
 
 
-@router.message(F.text == "📱 Connect Telegram")
+@router.message(F.message_thread_id.is_(None), F.text == "📱 Connect Telegram")
 async def btn_connect_telegram(message: Message, state: FSMContext):
     """Reply keyboard button — start Telegram auth flow."""
     await _start_auth_flow(message, state)
