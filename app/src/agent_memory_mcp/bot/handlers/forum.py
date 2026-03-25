@@ -187,32 +187,118 @@ async def btn_balance(message: Message):
 
 @router.message(F.text == "📡 Sources")
 async def btn_sources(message: Message):
-    """Show connected sources."""
+    """Show connected sources as buttons."""
+    await _show_sources(message, message.from_user.id)
+
+
+async def _show_sources(target, user_id: int, edit: bool = False):
+    """Source list: buttons with channel names + add hint."""
     from agent_memory_mcp.memory_api.service import list_sources
 
-    sources = await list_sources(message.from_user.id)
+    sources = await list_sources(user_id)
 
     if not sources:
-        await message.answer(
+        text_msg = (
             "📡 <b>Sources</b>\n\n"
-            "No sources connected yet.\n\n"
-            "💡 To add one, write in a new thread:\n"
-            "\"Connect channel @example for 3 months\"\n"
-            "Or use MCP tool: add_source(handle=\"@example\")"
+            "No sources connected yet.\n"
+            "Use MCP: <code>add_source(handle=\"@channel\")</code>"
         )
+        if edit and hasattr(target, "edit_text"):
+            await target.edit_text(text_msg)
+        else:
+            await target.answer(text_msg)
         return
 
-    lines = ["📡 <b>Connected sources:</b>\n"]
-    for i, s in enumerate(sources, 1):
+    buttons = []
+    row = []
+    for s in sources:
         name = f"@{s['channel_username']}" if s.get("channel_username") else s.get("display_name", "?")
         count = s.get("message_count", 0)
-        depth = s.get("sync_depth") or "?"
-        synced = s.get("last_synced")
-        status = f"synced {synced}" if synced else "pending"
-        lines.append(f"{i}. {name} — {count} msgs ({status})")
-        lines.append(f"   Depth: {depth}")
-    lines.append("\n💡 To add: write in a thread \"Connect channel @...\"")
-    await message.answer("\n".join(lines))
+        label = f"📡 {name} ({count})"
+        row.append(InlineKeyboardButton(
+            text=label,
+            callback_data=f"src:view:{s['id']}",
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    text_msg = f"📡 <b>Sources</b> ({len(sources)})"
+
+    if edit and hasattr(target, "edit_text"):
+        try:
+            await target.edit_text(text_msg, reply_markup=kb)
+        except Exception:
+            await target.answer(text_msg, reply_markup=kb)
+    else:
+        await target.answer(text_msg, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("src:view:"))
+async def cb_source_view(callback: CallbackQuery):
+    """View a single source — details + delete button."""
+    source_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    from agent_memory_mcp.db import queries as db_q
+    from uuid import UUID
+
+    domain = await db_q.get_domain(async_engine, UUID(source_id))
+    if not domain or domain["owner_id"] != user_id:
+        await callback.answer("Source not found.", show_alert=True)
+        return
+
+    name = f"@{domain['channel_username']}" if domain.get("channel_username") else domain.get("display_name", "?")
+    synced = domain["last_synced_at"].strftime("%d.%m %H:%M") if domain.get("last_synced_at") else "not yet"
+    msgs = domain.get("message_count", 0)
+    entities = domain.get("entity_count", 0)
+    depth = domain.get("sync_depth", "?")
+
+    text_msg = (
+        f"📡 <b>{name}</b>\n\n"
+        f"Messages: <b>{msgs}</b>\n"
+        f"Entities: {entities}\n"
+        f"Depth: {depth}\n"
+        f"Last synced: {synced}"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Delete Source", callback_data=f"src:delete:{source_id}")],
+        [InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")],
+    ])
+
+    await callback.message.edit_text(text_msg, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "src:list")
+async def cb_source_list(callback: CallbackQuery):
+    """Back to source list."""
+    await _show_sources(callback.message, callback.from_user.id, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("src:delete:"))
+async def cb_source_delete(callback: CallbackQuery):
+    """Delete a source — removes from DB and memory."""
+    source_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    from agent_memory_mcp.db import queries as db_q
+    from uuid import UUID
+
+    domain = await db_q.get_domain(async_engine, UUID(source_id))
+    if not domain or domain["owner_id"] != user_id:
+        await callback.answer("Source not found.", show_alert=True)
+        return
+
+    name = f"@{domain.get('channel_username', '?')}"
+    await db_q.delete_domain(async_engine, UUID(source_id))
+    await callback.answer(f"{name} deleted.")
+    await _show_sources(callback.message, user_id, edit=True)
 
 
 class KeyStates(StatesGroup):
