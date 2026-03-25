@@ -36,14 +36,14 @@ _key_cache: dict[str, dict] = {}
 
 
 async def _resolve_owner(ctx: Context | None) -> int:
-    """Extract owner_id from the Bearer token (API key) in MCP request.
+    """Extract owner_id from the Bearer token (API key) in MCP request."""
+    key = await _resolve_api_key(ctx)
+    return key["telegram_id"] if key else _admin_id()
 
-    After OAuth flow, Claude Code sends Authorization: Bearer amk_xxx
-    on every MCP request. We hash it and look up the owner.
-    """
+
+async def _resolve_api_key(ctx: Context | None) -> dict | None:
+    """Get full API key record from Bearer token."""
     api_key_raw = None
-
-    # Get Bearer token from HTTP request via FastMCP helper
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
@@ -53,23 +53,38 @@ async def _resolve_owner(ctx: Context | None) -> int:
     except Exception:
         pass
 
-    # Fallback to admin
     if not api_key_raw:
-        from agent_memory_mcp.config import settings
-        return settings.admin_telegram_id
+        return None
 
     key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
 
     if key_hash in _key_cache:
-        return _key_cache[key_hash]["telegram_id"]
+        return _key_cache[key_hash]
 
     api_key = await get_api_key_by_hash(async_engine, key_hash)
     if not api_key or not api_key["is_active"]:
-        from agent_memory_mcp.config import settings
-        return settings.admin_telegram_id
+        return None
 
     _key_cache[key_hash] = api_key
-    return api_key["telegram_id"]
+    return api_key
+
+
+def _admin_id() -> int:
+    from agent_memory_mcp.config import settings
+    return settings.admin_telegram_id
+
+
+async def _charge(ctx: Context | None, credits: int, endpoint: str) -> None:
+    """Charge credits for an API call."""
+    if credits <= 0:
+        return
+    key = await _resolve_api_key(ctx)
+    if key:
+        try:
+            from agent_memory_mcp.memory_api.auth import charge_credits
+            await charge_credits(async_engine, key["id"], credits, endpoint)
+        except Exception:
+            log.warning("charge_credits_failed", key_id=str(key["id"]), credits=credits)
 
 
 def _ok(result, credits_used: int = 0) -> str:
@@ -93,6 +108,7 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10, c
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.search_memory(query=query, owner_id=owner_id, scope=scope, limit=limit)
+    await _charge(ctx, 3, "search")
     return _ok(result, credits_used=3)
 
 
@@ -109,6 +125,7 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_digest(owner_id=owner_id, scope=scope, period=period)
+    await _charge(ctx, 10, "digest")
     return _ok(result, credits_used=10)
 
 
@@ -125,6 +142,7 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_decisions(owner_id=owner_id, scope=scope, topic=topic)
+    await _charge(ctx, 5, "decisions")
     return _ok(result, credits_used=5)
 
 
@@ -148,6 +166,7 @@ async def add_source(handle: str, source_type: str = "channel", sync_range: str 
     result = await service.add_source(
         owner_id=owner_id, handle=handle, source_type=source_type, sync_range=sync_range,
     )
+    await _charge(ctx, 5, "add_source")
     return _ok(result, credits_used=5)
 
 
@@ -243,4 +262,5 @@ async def get_agent_context(task: str, scope: str, ctx: Context = None) -> str:
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.get_agent_context(owner_id=owner_id, task=task, scope=scope)
+    await _charge(ctx, 10, "agent_context")
     return _ok(result, credits_used=10)
