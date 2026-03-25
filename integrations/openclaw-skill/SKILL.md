@@ -1,14 +1,15 @@
 ---
 name: agent-memory
-description: Long-term Telegram memory for AI agents — search conversations, get digests, extract decisions
-author: MAY4VFX
+description: Long-term Telegram memory for AI agents — search conversations, get digests, extract decisions, manage channel sources. Connects to any Telegram channel via user's own account.
 version: 0.1.0
-apiKey: true
-config:
-  baseUrl:
-    type: string
-    default: "https://agent.ai-vfx.com"
-    description: Agent Memory API base URL
+metadata:
+  openclaw:
+    requires:
+      env:
+        - AGENT_MEMORY_API_KEY
+      bins:
+        - curl
+    primaryEnv: AGENT_MEMORY_API_KEY
 ---
 
 # Agent Memory MCP
@@ -17,7 +18,7 @@ You have access to a Telegram conversation memory service. Use it to search mess
 
 ## Authentication
 
-All requests require `Authorization: Bearer {apiKey}` header. The API key is provided in your configuration.
+All requests require `Authorization: Bearer $AGENT_MEMORY_API_KEY` header. The API key is provided in your configuration.
 
 ## Available Operations
 
@@ -25,9 +26,9 @@ All requests require `Authorization: Bearer {apiKey}` header. The API key is pro
 Find information across synced Telegram channels.
 
 ```
-POST {baseUrl}/api/v1/memory/search
+POST https://agent.ai-vfx.com/api/v1/memory/search
 Content-Type: application/json
-Authorization: Bearer {apiKey}
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 
 {
   "query": "what was discussed about topic X",
@@ -42,17 +43,17 @@ Response: `{"answer": "...", "sources": [{"msg_id": 123, "url": "https://t.me/..
 See which Telegram channels are synced.
 
 ```
-GET {baseUrl}/api/v1/sources
-Authorization: Bearer {apiKey}
+GET https://agent.ai-vfx.com/api/v1/sources
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 ```
 
 ### Add Source
 Connect a Telegram channel for syncing.
 
 ```
-POST {baseUrl}/api/v1/sources/add
+POST https://agent.ai-vfx.com/api/v1/sources/add
 Content-Type: application/json
-Authorization: Bearer {apiKey}
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 
 {
   "handle": "@channel_username",
@@ -64,9 +65,9 @@ Authorization: Bearer {apiKey}
 Generate a summary of conversations for a time period.
 
 ```
-POST {baseUrl}/api/v1/digest
+POST https://agent.ai-vfx.com/api/v1/digest
 Content-Type: application/json
-Authorization: Bearer {apiKey}
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 
 {
   "scope": "@channel_username",
@@ -78,9 +79,9 @@ Authorization: Bearer {apiKey}
 Get decisions, action items, and open questions.
 
 ```
-POST {baseUrl}/api/v1/decisions
+POST https://agent.ai-vfx.com/api/v1/decisions
 Content-Type: application/json
-Authorization: Bearer {apiKey}
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 
 {
   "scope": "@channel_username",
@@ -92,15 +93,15 @@ Authorization: Bearer {apiKey}
 Monitor sync progress after adding sources.
 
 ```
-GET {baseUrl}/api/v1/sync-status
-Authorization: Bearer {apiKey}
+GET https://agent.ai-vfx.com/api/v1/sync-status
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 ```
 
 ### Get Account Balance
 
 ```
-GET {baseUrl}/api/v1/account/balance
-Authorization: Bearer {apiKey}
+GET https://agent.ai-vfx.com/api/v1/account/balance
+Authorization: Bearer $AGENT_MEMORY_API_KEY
 ```
 
 Response: `{"balance": 467, "total_spent": 33}`
@@ -117,7 +118,24 @@ Response: `{"balance": 467, "total_spent": 33}`
 
 ## Setup
 
-1. Message @AgentMemoryBot on Telegram
-2. Connect your Telegram account (📱 Connect Telegram)
-3. Create an API key (🔑 API Keys)
-4. Add the key to your OpenClaw config
+1. Message [@AgentMemoryBot](https://t.me/AgentMemoryBot) on Telegram
+2. Connect your Telegram account (📱 Connect Telegram button)
+3. Create an API key (🔑 API Keys → ➕ Create Key)
+4. Add the key to your OpenClaw config:
+
+```json
+// openclaw.json
+{
+  "skills": {
+    "entries": {
+      "agent-memory": {
+        "env": {
+          "AGENT_MEMORY_API_KEY": "amk_your_key_here"
+        }
+      }
+    }
+  }
+}
+```
+
+Or set as environment variable: `export AGENT_MEMORY_API_KEY=amk_your_key_here`
