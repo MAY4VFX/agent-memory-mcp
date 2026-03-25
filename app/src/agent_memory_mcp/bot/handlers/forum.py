@@ -187,37 +187,56 @@ async def btn_balance(message: Message):
 
 @router.message(F.text == "📡 Sources")
 async def btn_sources(message: Message):
-    """Show connected sources as buttons."""
+    """Show sources: folders + standalone channels."""
     await _show_sources(message, message.from_user.id)
 
 
 async def _show_sources(target, user_id: int, edit: bool = False):
-    """Source list: buttons with channel names + add hint."""
-    from agent_memory_mcp.memory_api.service import list_sources
+    """Top-level: folders as buttons + standalone channels."""
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db import queries_groups as gq
 
-    sources = await list_sources(user_id)
+    domains = await db_q.list_domains(async_engine, user_id)
+    groups = await gq.list_groups(async_engine, user_id)
 
-    if not sources:
+    # Find which domains belong to groups
+    grouped_ids: set = set()
+    for g in groups:
+        members = await gq.get_group_domains(async_engine, g["id"])
+        grouped_ids.update(m["id"] for m in members)
+
+    # Standalone = pinned or not in any group
+    standalone = [d for d in domains if d["id"] not in grouped_ids]
+
+    if not domains and not groups:
         text_msg = (
             "📡 <b>Sources</b>\n\n"
             "No sources connected yet.\n"
             "Use MCP: <code>add_source(handle=\"@channel\")</code>"
         )
-        if edit and hasattr(target, "edit_text"):
-            await target.edit_text(text_msg)
-        else:
-            await target.answer(text_msg)
+        await _send_or_edit(target, text_msg, edit=edit)
         return
 
     buttons = []
-    row = []
-    for s in sources:
-        name = f"@{s['channel_username']}" if s.get("channel_username") else s.get("display_name", "?")
-        count = s.get("message_count", 0)
-        label = f"📡 {name} ({count})"
-        row.append(InlineKeyboardButton(
+
+    # Folder buttons
+    for g in groups:
+        members = await gq.get_group_domains(async_engine, g["id"])
+        total_msgs = sum(m.get("message_count", 0) for m in members)
+        label = f"📁 {g['name']} ({len(members)} ch, {total_msgs} msgs)"
+        buttons.append([InlineKeyboardButton(
             text=label,
-            callback_data=f"src:view:{s['id']}",
+            callback_data=f"src:folder:{g['id']}",
+        )])
+
+    # Standalone channel buttons (rows of 2)
+    row = []
+    for d in standalone:
+        name = f"@{d['channel_username']}" if d.get("channel_username") else d.get("display_name", "?")
+        count = d.get("message_count", 0)
+        row.append(InlineKeyboardButton(
+            text=f"📡 {name} ({count})",
+            callback_data=f"src:view:{d['id']}",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -226,20 +245,59 @@ async def _show_sources(target, user_id: int, edit: bool = False):
         buttons.append(row)
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    text_msg = f"📡 <b>Sources</b> ({len(sources)})"
+    text_msg = f"📡 <b>Sources</b> ({len(domains)} channels)"
+    await _send_or_edit(target, text_msg, kb, edit)
 
-    if edit and hasattr(target, "edit_text"):
-        try:
-            await target.edit_text(text_msg, reply_markup=kb)
-        except Exception:
-            await target.answer(text_msg, reply_markup=kb)
-    else:
-        await target.answer(text_msg, reply_markup=kb)
+
+@router.callback_query(F.data.startswith("src:folder:"))
+async def cb_source_folder(callback: CallbackQuery):
+    """View channels inside a folder."""
+    group_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    from agent_memory_mcp.db import queries_groups as gq
+    from uuid import UUID
+
+    group = await gq.get_group(async_engine, UUID(group_id))
+    if not group or group["owner_id"] != user_id:
+        await callback.answer("Folder not found.", show_alert=True)
+        return
+
+    members = await gq.get_group_domains(async_engine, UUID(group_id))
+
+    buttons = []
+    row = []
+    for d in members:
+        name = f"@{d['channel_username']}" if d.get("channel_username") else d.get("display_name", "?")
+        count = d.get("message_count", 0)
+        row.append(InlineKeyboardButton(
+            text=f"📡 {name} ({count})",
+            callback_data=f"src:view:{d['id']}",
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton(text="🗑 Delete Folder", callback_data=f"src:delfolder:{group_id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")])
+
+    total_msgs = sum(m.get("message_count", 0) for m in members)
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    text_msg = (
+        f"📁 <b>{group['name']}</b>\n\n"
+        f"Channels: {len(members)}\n"
+        f"Total messages: {total_msgs}"
+    )
+
+    await callback.message.edit_text(text_msg, reply_markup=kb)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("src:view:"))
 async def cb_source_view(callback: CallbackQuery):
-    """View a single source — details + delete button."""
+    """View a single source — details + delete."""
     source_id = callback.data.split(":", 2)[2]
     user_id = callback.from_user.id
 
@@ -253,20 +311,17 @@ async def cb_source_view(callback: CallbackQuery):
 
     name = f"@{domain['channel_username']}" if domain.get("channel_username") else domain.get("display_name", "?")
     synced = domain["last_synced_at"].strftime("%d.%m %H:%M") if domain.get("last_synced_at") else "not yet"
-    msgs = domain.get("message_count", 0)
-    entities = domain.get("entity_count", 0)
-    depth = domain.get("sync_depth", "?")
 
     text_msg = (
         f"📡 <b>{name}</b>\n\n"
-        f"Messages: <b>{msgs}</b>\n"
-        f"Entities: {entities}\n"
-        f"Depth: {depth}\n"
+        f"Messages: <b>{domain.get('message_count', 0)}</b>\n"
+        f"Entities: {domain.get('entity_count', 0)}\n"
+        f"Depth: {domain.get('sync_depth', '?')}\n"
         f"Last synced: {synced}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Delete Source", callback_data=f"src:delete:{source_id}")],
+        [InlineKeyboardButton(text="🗑 Delete", callback_data=f"src:delete:{source_id}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")],
     ])
 
@@ -276,14 +331,14 @@ async def cb_source_view(callback: CallbackQuery):
 
 @router.callback_query(F.data == "src:list")
 async def cb_source_list(callback: CallbackQuery):
-    """Back to source list."""
+    """Back to top-level source list."""
     await _show_sources(callback.message, callback.from_user.id, edit=True)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("src:delete:"))
 async def cb_source_delete(callback: CallbackQuery):
-    """Delete a source — removes from DB and memory."""
+    """Delete a single source."""
     source_id = callback.data.split(":", 2)[2]
     user_id = callback.from_user.id
 
@@ -295,10 +350,44 @@ async def cb_source_delete(callback: CallbackQuery):
         await callback.answer("Source not found.", show_alert=True)
         return
 
-    name = f"@{domain.get('channel_username', '?')}"
     await db_q.delete_domain(async_engine, UUID(source_id))
-    await callback.answer(f"{name} deleted.")
+    await callback.answer(f"@{domain.get('channel_username', '?')} deleted.")
     await _show_sources(callback.message, user_id, edit=True)
+
+
+@router.callback_query(F.data.startswith("src:delfolder:"))
+async def cb_source_delete_folder(callback: CallbackQuery):
+    """Delete all channels in a folder + the group itself."""
+    group_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db import queries_groups as gq
+    from uuid import UUID
+
+    group = await gq.get_group(async_engine, UUID(group_id))
+    if not group or group["owner_id"] != user_id:
+        await callback.answer("Folder not found.", show_alert=True)
+        return
+
+    members = await gq.get_group_domains(async_engine, UUID(group_id))
+    for m in members:
+        await db_q.delete_domain(async_engine, m["id"])
+    await gq.delete_group(async_engine, UUID(group_id))
+
+    await callback.answer(f"Folder '{group['name']}' deleted ({len(members)} channels).")
+    await _show_sources(callback.message, user_id, edit=True)
+
+
+async def _send_or_edit(target, text: str, kb=None, edit: bool = False):
+    """Helper: edit message if possible, otherwise send new."""
+    if edit and hasattr(target, "edit_text"):
+        try:
+            await target.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await target.answer(text, reply_markup=kb)
 
 
 class KeyStates(StatesGroup):
