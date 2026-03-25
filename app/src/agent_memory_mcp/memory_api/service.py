@@ -404,12 +404,15 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     if not messages:
         return {"digest": "No messages found for this period.", "period": period, "message_count": 0}
 
-    # Deduplicate and cluster
-    messages = deduplicate(messages)
+    # Embed → deduplicate → cluster
     embedder = EmbeddingClient()
     try:
-        embedded = await embed_messages(messages, embedder)
-        clusters = cluster_messages(embedded)
+        messages, embeddings = await embed_messages(messages, embedder)
+        messages, embeddings = deduplicate(messages, embeddings)
+        clusters = cluster_messages(messages, embeddings)
+    except Exception:
+        log.warning("digest_pipeline_failed", exc_info=True)
+        clusters = []
     finally:
         await embedder.close()
 
