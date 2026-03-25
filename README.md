@@ -228,13 +228,14 @@ Query arrives → Self-RAG gate → Route decision:
 
 ## 🧩 Memory Primitives
 
-| Tool | Credits | Description |
-|------|---------|-------------|
+| Tool | Points | Description |
+|------|--------|-------------|
 | 🔍 `search_memory` | 3 | Hybrid search with answer generation. Scope by channel, folder, or all sources |
-| 📋 `get_digest` | 10 | Period digest (1d / 3d / 7d / 30d) with topic clustering and source links |
-| ✅ `get_decisions` | 5 | Extract decisions, action items, and open questions from conversations |
-| 🤖 `get_agent_context` | 10 | Full context package: search + digest + graph + decisions in one call |
-| ➕ `add_source` | 5 | Connect a channel, group, or Telegram folder. Set sync depth (1m–1y) |
+| 📋 `get_digest` | 25 | Period digest (1d / 3d / 7d / 30d) with topic clustering and source links |
+| ✅ `get_decisions` | 12 | Extract decisions, action items, and open questions from conversations |
+| 🤖 `get_agent_context` | 15 | Full context package: search + digest + graph + decisions in one call |
+| 🔬 `analysis/deep` | 50 | Deep analysis with map-reduce over hundreds of posts |
+| ➕ `add_source` | free | Connect a channel, group, or Telegram folder. Set sync depth (1m–1y) |
 | 📂 `list_sources` | free | List all connected sources with message counts and sync status |
 | 📁 `list_folders` | free | List your Telegram folders and their channels |
 | 🔗 `check_telegram_auth` | free | Check if your Telegram account is connected |
@@ -325,28 +326,31 @@ curl https://agent.ai-vfx.com/api/v1/account/balance \
 
 ## 💎 TON Integration
 
-### Credit System
+### Points System
 
-- 🎁 **Welcome bonus**: 500 free credits for every new user
+- 🎁 **Welcome bonus**: 100 free points for every new user (~33 searches)
 - 💳 **Pay-per-query**: no subscriptions, pay only for what you use
-- 💰 **Rate**: 1 TON ≈ 1,000 credits
+- 💰 **Pricing**: 1 point = $0.01 — TON conversion uses **live CoinGecko rate**
 
-### Top-Up Packages
+### Top-Up Options
 
-| Package | Credits | Price |
-|---------|---------|-------|
-| Starter | 500 | 0.5 TON |
-| Standard | 1,000 | 1 TON |
-| Pro | 5,000 | 5 TON |
-| Team | 10,000 | 10 TON |
+| Amount | Points (at ~$3.30/TON) |
+|--------|----------------------|
+| 0.5 TON | ~165 pts |
+| 1 TON | ~330 pts |
+| 3 TON | ~990 pts |
+| 5 TON | ~1,650 pts |
+| 10 TON | ~3,300 pts |
+
+> Points are calculated dynamically based on the real-time TON/USD rate.
 
 ### How Top-Up Works
 
-1. Tap 💎 **Top Up** in the bot → pick amount
+1. Tap 💎 **Top Up** in the bot → pick amount → see live TON rate and exact points
 2. Deep link opens your TON wallet (Tonkeeper, etc.) with pre-filled amount and payment ID
 3. Send the transaction
 4. Backend detects the payment via TonCenter API (polling every 5s)
-5. Credits added to your account instantly
+5. Points added to your account instantly
 
 ---
 
