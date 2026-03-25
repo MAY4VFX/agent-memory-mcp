@@ -9,7 +9,7 @@
 Connect your channels and chats — your agent will never forget.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/protocol-MCP-purple.svg)](https://modelcontextprotocol.io)
 [![TON](https://img.shields.io/badge/payments-TON-0088CC.svg)](https://ton.org)
 
@@ -436,4 +436,4 @@ For teams and companies that care about data sovereignty: all components are des
 
 ## 📄 License
 
-MIT
+GPL-3.0 — see [LICENSE](LICENSE)
