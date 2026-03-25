@@ -50,9 +50,9 @@ class SyncScheduler:
         if self._collector:
             return self._collector
         # Fallback: try per-user collector from pool
-        from agent_memory_mcp.collector.pool import collector_pool
-        if collector_pool:
-            uc = await collector_pool.get_collector(domain["owner_id"])
+        from agent_memory_mcp.collector import pool as _pool_mod
+        if _pool_mod.collector_pool:
+            uc = await _pool_mod.collector_pool.get_collector(domain["owner_id"])
             if uc:
                 return uc.client
         return None
