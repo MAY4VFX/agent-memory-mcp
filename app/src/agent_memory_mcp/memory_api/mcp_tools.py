@@ -38,7 +38,29 @@ _key_cache: dict[str, dict] = {}
 async def _resolve_owner(ctx: Context | None) -> int:
     """Extract owner_id from the Bearer token (API key) in MCP request."""
     key = await _resolve_api_key(ctx)
-    return key["telegram_id"] if key else _admin_id()
+    if key:
+        return key["telegram_id"]
+    # No key found — check middleware auth (Bearer was validated there already)
+    # The middleware in app.py already rejects unauthorized requests with 401,
+    # so if we get here, there's an auth header but we can't parse it.
+    # Last resort: read from the HTTP request directly
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        auth = request.headers.get("authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        if token:
+            # Try direct DB lookup
+            key_hash = hashlib.sha256(token.encode()).hexdigest()
+            api_key = await get_api_key_by_hash(async_engine, key_hash)
+            if api_key and api_key["is_active"]:
+                _key_cache[key_hash] = api_key
+                return api_key["telegram_id"]
+    except Exception:
+        pass
+    log.warning("resolve_owner_failed_no_key")
+    from agent_memory_mcp.config import settings
+    return settings.admin_telegram_id
 
 
 async def _resolve_api_key(ctx: Context | None) -> dict | None:
@@ -50,10 +72,11 @@ async def _resolve_api_key(ctx: Context | None) -> dict | None:
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             api_key_raw = auth_header.removeprefix("Bearer ").strip()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("get_http_request_failed", error=str(e))
 
     if not api_key_raw:
+        log.debug("no_api_key_in_request")
         return None
 
     key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
@@ -75,16 +98,18 @@ def _admin_id() -> int:
 
 
 async def _charge(ctx: Context | None, credits: int, endpoint: str) -> None:
-    """Charge credits for an API call."""
+    """Charge credits for an API call. Uses Bearer token to identify user."""
     if credits <= 0:
         return
     key = await _resolve_api_key(ctx)
-    if key:
-        try:
-            from agent_memory_mcp.memory_api.auth import charge_credits
-            await charge_credits(async_engine, key["id"], credits, endpoint)
-        except Exception:
-            log.warning("charge_credits_failed", key_id=str(key["id"]), credits=credits)
+    if not key:
+        log.warning("charge_skipped_no_key", endpoint=endpoint, credits=credits)
+        return
+    try:
+        from agent_memory_mcp.memory_api.auth import charge_credits
+        await charge_credits(async_engine, key["id"], credits, endpoint)
+    except Exception:
+        log.warning("charge_credits_failed", key_id=str(key["id"]), credits=credits, exc_info=True)
 
 
 def _ok(result, credits_used: int = 0) -> str:
