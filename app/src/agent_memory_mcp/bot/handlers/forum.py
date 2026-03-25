@@ -152,7 +152,7 @@ async def cb_create_first_key(callback: CallbackQuery):
 
 # --- Reply keyboard button handlers ---
 
-@router.message(F.text == "💰 Balance")
+@router.message(_GENERAL, F.text == "💰 Balance")
 async def btn_balance(message: Message):
     """Show user-level balance and recent transactions."""
     user_id = message.from_user.id
@@ -194,7 +194,7 @@ async def btn_balance(message: Message):
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text == "📡 Sources")
+@router.message(_GENERAL, F.text == "📡 Sources")
 async def btn_sources(message: Message):
     """Show sources: folders + standalone channels."""
     await _show_sources(message, message.from_user.id)
@@ -403,7 +403,7 @@ class KeyStates(StatesGroup):
     waiting_name = State()
 
 
-@router.message(F.text == "🔑 API Keys")
+@router.message(_GENERAL, F.text == "🔑 API Keys")
 async def btn_keys(message: Message):
     """Show API keys — just buttons with names."""
     await _show_keys(message, message.from_user.id)
@@ -577,7 +577,7 @@ async def cb_key_delete(callback: CallbackQuery):
     await _show_keys(callback.message, user_id, edit=True)
 
 
-@router.message(F.text == "📊 Usage")
+@router.message(_GENERAL, F.text == "📊 Usage")
 async def btn_usage(message: Message):
     """Show usage statistics for user."""
     user_id = message.from_user.id
@@ -630,7 +630,7 @@ async def btn_usage(message: Message):
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text == "❓ Help")
+@router.message(_GENERAL, F.text == "❓ Help")
 async def btn_help(message: Message):
     """Show help / integration guide."""
     await message.answer(
