@@ -303,14 +303,23 @@ async def _tool_keyword_search(args: dict, ctx: AgentContext) -> str:
         query, ctx.domain_id, ctx.engine,
         channel_id=ctx.channel_ids[0] if ctx.channel_ids else 0,
     )
-    # Cache chunks
+
+    # Filter by since_date if set
+    if ctx.since_date:
+        since_ts = int(ctx.since_date.timestamp())
+        chunks = [c for c in chunks if c.msg_date and c.msg_date >= since_ts]
+        total = len(chunks)
+
     for c in chunks:
         ctx.cached_chunks[c.id] = c
 
-    # Return snippets
     lines = [f"BM25 results: {total} total, showing {len(chunks)}"]
     for c in chunks[:30]:
-        lines.append(f"- [{c.id}] (score={c.score:.2f}) {c.content[:200]}")
+        date_str = ""
+        if c.msg_date:
+            from datetime import datetime, timezone
+            date_str = f" [{datetime.fromtimestamp(c.msg_date, tz=timezone.utc).strftime('%Y-%m-%d')}]"
+        lines.append(f"- [{c.id}]{date_str} (score={c.score:.2f}) {c.content[:200]}")
 
     expansion = await _graph_expansion(ctx, chunks)
     if expansion:
@@ -325,13 +334,22 @@ async def _tool_semantic_search(args: dict, ctx: AgentContext) -> str:
         [query], ctx.channel_ids, ctx.milvus, ctx.embedder,
         limit=limit, query_text=query,
     )
-    # Cache chunks
+
+    # Filter by since_date if set
+    if ctx.since_date:
+        since_ts = int(ctx.since_date.timestamp())
+        chunks = [c for c in chunks if c.msg_date and c.msg_date >= since_ts]
+
     for c in chunks:
         ctx.cached_chunks[c.id] = c
 
     lines = [f"Vector results: {len(chunks)} returned"]
     for c in chunks[:30]:
-        lines.append(f"- [{c.id}] (score={c.score:.3f}) {c.content[:200]}")
+        date_str = ""
+        if c.msg_date:
+            from datetime import datetime, timezone
+            date_str = f" [{datetime.fromtimestamp(c.msg_date, tz=timezone.utc).strftime('%Y-%m-%d')}]"
+        lines.append(f"- [{c.id}]{date_str} (score={c.score:.3f}) {c.content[:200]}")
 
     expansion = await _graph_expansion(ctx, chunks)
     if expansion:

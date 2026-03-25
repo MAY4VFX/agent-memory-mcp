@@ -52,5 +52,8 @@ class AgentContext:
     progress_callback: Callable | None = None
     progress_step: int = 0
 
+    # Time filter
+    since_date: "datetime | None" = None
+
     # Passthrough: if set, agent loop returns this directly (skips re-summarization)
     passthrough_answer: str | None = None
