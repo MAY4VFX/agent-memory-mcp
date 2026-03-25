@@ -18,25 +18,56 @@ from agent_memory_mcp.storage.reranker_client import RerankerClient
 log = structlog.get_logger(__name__)
 
 
+def _parse_since(since: str | None) -> "datetime | None":
+    """Parse 'since' parameter: '2d', '1w', '3m', or ISO date string."""
+    if not since:
+        return None
+    from datetime import datetime, timedelta, timezone
+    since = since.strip().lower()
+    now = datetime.now(timezone.utc)
+    mapping = {
+        "1d": timedelta(days=1), "2d": timedelta(days=2), "3d": timedelta(days=3),
+        "1w": timedelta(weeks=1), "2w": timedelta(weeks=2),
+        "1m": timedelta(days=30), "3m": timedelta(days=90),
+    }
+    if since in mapping:
+        return now - mapping[since]
+    # Try ISO date
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(since, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
 async def search_memory(
     query: str,
     owner_id: int,
     scope: str | None = None,
     limit: int = 10,
+    since: str | None = None,
 ) -> dict:
     """Search memory using agent pipeline. Returns answer + sources."""
     from agent_memory_mcp.db import queries_conversations as qc
     from agent_memory_mcp.pipeline.agent_orchestrator import run_agent_pipeline
 
-    # Resolve domain(s) for this owner
     domain_ids = await _resolve_scope(owner_id, scope)
     if not domain_ids:
         return {"answer": "Нет подключённых источников. Добавь канал через агента.", "sources": []}
 
-    domain_id = domain_ids[0]
-    domain = await db_q.get_domain(async_engine, domain_id)
+    # Parse time filter
+    since_dt = _parse_since(since)
 
-    # Create temp conversation
+    # Augment query with time context for the LLM
+    augmented_query = query
+    if since_dt:
+        from datetime import datetime, timezone
+        date_str = since_dt.strftime("%Y-%m-%d")
+        augmented_query = f"{query} (only messages after {date_str})"
+
+    domain_id = domain_ids[0]
+
     conv = await qc.create_conversation(
         async_engine, user_id=owner_id, domain_id=domain_id,
         title=f"[api] {query[:40]}",
@@ -49,7 +80,7 @@ async def search_memory(
 
     try:
         answer, payload = await run_agent_pipeline(
-            query=query,
+            query=augmented_query,
             user_id=owner_id,
             conversation_id=conv["id"],
             domain_ids=domain_ids,
@@ -58,6 +89,7 @@ async def search_memory(
             graph=graph,
             embedder=embedder,
             reranker=reranker,
+            since_date=since_dt,
         )
     finally:
         milvus.close()
@@ -66,11 +98,20 @@ async def search_memory(
         await reranker.close()
         await qc.delete_conversation(async_engine, conv["id"])
 
-    sources = [
-        {"msg_id": s.message_id, "url": s.url, "channel": s.channel_username}
-        for s in (answer.sources or [])[:limit]
-    ]
-    return {"answer": answer.answer, "sources": sources}
+    # Post-filter sources by date if since is specified
+    sources = []
+    for s in (answer.sources or [])[:limit * 2]:  # fetch more, filter down
+        src = {"msg_id": s.message_id, "url": s.url, "channel": s.channel_username}
+        if since_dt and hasattr(s, "date") and s.date and s.date < since_dt:
+            continue
+        sources.append(src)
+        if len(sources) >= limit:
+            break
+
+    result = {"answer": answer.answer, "sources": sources}
+    if since:
+        result["filtered_since"] = since
+    return result
 
 
 async def list_sources(owner_id: int) -> list[dict]:

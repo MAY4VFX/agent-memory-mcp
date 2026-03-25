@@ -125,19 +125,20 @@ def _ok(result, credits_used: int = 0) -> str:
 
 
 @mcp.tool()
-async def search_memory(query: str, scope: str | None = None, limit: int = 10, ctx: Context = None) -> str:
+async def search_memory(query: str, scope: str | None = None, limit: int = 10, since: str | None = None, ctx: Context = None) -> str:
     """Search Telegram memory by semantic query.
 
     Args:
         query: What to search for in the memory.
         scope: Optional scope. "@username" for one channel, "folder:Name" for a folder, or omit for all sources.
         limit: Maximum number of source references to return (default 10).
+        since: Optional time filter. Examples: "2d" (last 2 days), "1w" (last week), "2026-03-23" (since date). Only returns messages after this date.
 
     Returns:
         Answer based on memory with source references.
     """
     owner_id = await _resolve_owner(ctx)
-    result = await service.search_memory(query=query, owner_id=owner_id, scope=scope, limit=limit)
+    result = await service.search_memory(query=query, owner_id=owner_id, scope=scope, limit=limit, since=since)
     await _charge(ctx, 3, "search")
     return _ok(result, credits_used=3)
 
