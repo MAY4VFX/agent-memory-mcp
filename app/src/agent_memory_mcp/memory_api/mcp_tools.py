@@ -9,6 +9,7 @@ Auth flow:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 
@@ -157,6 +158,9 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10, s
 async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str:
     """Get a digest of Telegram conversations for a period.
 
+    For large channels this may take 1-2 minutes (embedding + clustering + LLM).
+    If it takes too long, use keyword_search or vector_search for targeted queries instead.
+
     Args:
         scope: Source scope — "@username", "folder:Name", or domain_id.
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
@@ -165,7 +169,13 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
         Structured digest with key topics and highlights.
     """
     owner_id = await _resolve_owner(ctx)
-    result = await service.get_digest(owner_id=owner_id, scope=scope, period=period)
+    try:
+        result = await asyncio.wait_for(
+            service.get_digest(owner_id=owner_id, scope=scope, period=period),
+            timeout=180,
+        )
+    except asyncio.TimeoutError:
+        result = {"digest": "Digest generation timed out. Try a shorter period or specific channel.", "period": period}
     await _charge(ctx, 25, "digest")
     return _ok(result, credits_used=25)
 
