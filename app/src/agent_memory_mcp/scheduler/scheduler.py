@@ -87,14 +87,13 @@ class SyncScheduler:
                     self._syncing_domains.add(did)
                     asyncio.create_task(self._run_incremental(domain))
                     started += 1
-                if domains:
-                    log.info(
-                        "scheduler_tick",
-                        eligible=len(domains),
-                        started=started,
-                        skipped=skipped,
-                        in_flight=len(self._syncing_domains),
-                    )
+                log.info(
+                    "scheduler_tick",
+                    eligible=len(domains),
+                    started=started,
+                    skipped=skipped,
+                    in_flight=len(self._syncing_domains),
+                )
 
                 # Check digests every minute
                 await self._check_digests()
