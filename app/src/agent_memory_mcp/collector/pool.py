@@ -44,6 +44,43 @@ class _UserCollector:
             "username": entity.username or username,
         }
 
+    async def get_folders(self) -> list[dict]:
+        """Get user's Telegram folders with channels."""
+        from telethon.tl.functions.messages import GetDialogFiltersRequest
+        from telethon.tl.types import InputPeerChannel
+
+        try:
+            result = await self.client(GetDialogFiltersRequest())
+        except Exception:
+            log.exception("get_dialog_filters_failed")
+            return []
+
+        folders: list[dict] = []
+        filters = getattr(result, "filters", result) if not isinstance(result, list) else result
+        for f in filters:
+            if not hasattr(f, "include_peers"):
+                continue
+            peers: list[dict] = []
+            for peer in (f.include_peers or []):
+                if isinstance(peer, InputPeerChannel):
+                    try:
+                        entity = await self.client.get_entity(peer)
+                        peers.append({
+                            "channel_id": entity.id,
+                            "title": getattr(entity, "title", ""),
+                            "username": getattr(entity, "username", "") or "",
+                        })
+                    except Exception:
+                        pass
+            if peers:
+                title = f.title
+                if not isinstance(title, str):
+                    title = getattr(title, "text", None) or str(title)
+                folders.append({"id": f.id, "title": title, "peers": peers})
+
+        self.last_used = time.monotonic()
+        return folders
+
 
 class CollectorPool:
     """Manages per-user Telethon clients loaded from encrypted DB sessions."""
