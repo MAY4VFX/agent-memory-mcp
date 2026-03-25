@@ -9,16 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python deps first (cached layer — only rebuilds when pyproject.toml changes)
-COPY pyproject.toml .
-RUN pip install --no-cache-dir --proxy "http://192.168.2.140:8118" . 2>/dev/null || \
-    pip install --no-cache-dir .
+# Install Python deps first (cached — only rebuilds when requirements.txt changes)
+COPY requirements.txt .
+ENV PIP_PROXY=http://192.168.2.140:8118
+RUN pip install --no-cache-dir --proxy "$PIP_PROXY" -r requirements.txt
 
-# Copy source code (changes here don't re-install deps)
+# Copy source code + config (changes here don't re-install deps)
+COPY pyproject.toml alembic.ini ./
 COPY src/ src/
-COPY alembic.ini .
-
-# Re-install in editable-like mode so the package points to fresh source
 RUN pip install --no-deps --no-cache-dir .
 
 EXPOSE 8002
