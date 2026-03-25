@@ -36,8 +36,12 @@ _TOPUP_OPTIONS = [
 
 @router.message(F.text == "💎 Top Up")
 async def btn_topup(message: Message):
-    """Show top-up amount selection with live TON price."""
-    ton_price = await get_ton_price_usd()
+    """Show top-up options + purchase history."""
+    try:
+        ton_price = await get_ton_price_usd()
+    except Exception:
+        ton_price = 1.30  # fallback
+
     rows = []
     row = []
     for amount, label in _TOPUP_OPTIONS:
@@ -52,14 +56,47 @@ async def btn_topup(message: Message):
     if row:
         rows.append(row)
 
+    # Purchase history
+    from sqlalchemy import text as sql_text
+    async with async_engine.begin() as conn:
+        bal_row = await conn.execute(
+            sql_text("SELECT points_balance FROM users WHERE telegram_id = :tid"),
+            {"tid": message.from_user.id},
+        )
+        balance = bal_row.scalar() or 0
+
+        hist_rows = await conn.execute(
+            sql_text("""
+                SELECT amount, balance_after, created_at, ton_tx_hash
+                FROM credit_transactions
+                WHERE (telegram_id = :tid
+                       OR api_key_id IN (SELECT id FROM api_keys WHERE telegram_id = :tid))
+                  AND type = 'topup'
+                ORDER BY created_at DESC LIMIT 5
+            """),
+            {"tid": message.from_user.id},
+        )
+        history = hist_rows.mappings().all()
+
+    lines = [
+        f"💎 <b>Top Up</b>\n",
+        f"Balance: <b>{balance}</b> points",
+        f"TON rate: ${ton_price:.2f} (live)",
+        "1 point = $0.01\n",
+    ]
+
+    if history:
+        lines.append("<b>Recent purchases:</b>")
+        for h in history:
+            dt = h["created_at"].strftime("%d.%m %H:%M") if h["created_at"] else ""
+            tx = f" tx:{h['ton_tx_hash'][:8]}..." if h.get("ton_tx_hash") else ""
+            lines.append(f"  +{h['amount']} pts → {h['balance_after']} bal  {dt}{tx}")
+        lines.append("")
+
+    lines.append("Choose amount:")
+
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    await message.answer(
-        "💎 <b>Top Up</b>\n\n"
-        f"TON rate: <b>${ton_price:.2f}</b> (live)\n"
-        "1 point = $0.01\n\n"
-        "Choose amount:",
-        reply_markup=kb,
-    )
+    await message.answer("\n".join(lines), reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("topup:"))
