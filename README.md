@@ -427,13 +427,16 @@ Every fact in the digest links back to the original post — click through to se
 
 **Current state**: LLM inference runs through a LiteLLM proxy (supports OpenAI, Anthropic, DeepSeek). Embeddings and reranking run on dedicated GPU servers with open-source models (BGE-M3, BGE-reranker).
 
-**Where we're heading**:
+**Where we're heading — [Cocoon](https://cocoon.org/) integration**:
 
-- 🔄 **Open-source LLM migration** — replace API-based LLMs with self-hosted open-source models (Cocoon and others)
-- 🏠 **Self-hosted deployment** — the entire stack (embedding, LLM, storage, graph) can run on your infrastructure
-- 🔐 **Data stays in your perimeter** — Telegram → your server → your agent. No data leaves the TON + Telegram ecosystem
+[Cocoon](https://cocoon.org/) (**Co**nfidential **Co**mpute **O**pen **N**etwork) is Telegram's native GPU compute layer built on TON — confidential AI inference powered by decentralized hardware. This is a natural next step for Agent Memory MCP:
 
-For teams and companies that care about data sovereignty: all components are designed to be replaceable. Swap out any layer without changing the agent interface.
+- 🧠 **Confidential LLM inference** — move all AI processing (extraction, reasoning, answer generation) to Cocoon's confidential compute. Your data never leaves the encrypted enclave — not even the GPU owner can see it
+- ⛏️ **Decentralized GPU power** — no dependency on centralized API providers. Cocoon GPU miners earn TON while powering your agent's memory pipeline
+- 🔐 **Full Telegram-native stack** — data flows entirely within the Telegram + TON ecosystem: Telegram messages → Cocoon inference → TON payments. Zero external dependencies
+- 🏠 **Self-hosted deployment** — the entire stack (embedding, LLM, storage, graph) is designed to run on your own infrastructure or on Cocoon's network
+
+All components are modular and replaceable. Swap out any layer — LLM provider, embedding model, storage engine — without changing the agent interface. Today it works with any LLM via LiteLLM; tomorrow it runs natively on Cocoon.
 
 ---
 
