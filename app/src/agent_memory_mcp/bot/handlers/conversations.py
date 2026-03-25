@@ -114,9 +114,9 @@ async def export_conversation(message: Message) -> None:
 
 # ------------------------------------------------------------------ Query handler
 
-@router.message(F.text)
+@router.message(F.text, F.message_thread_id.is_not(None))
 async def handle_text_query(message: Message) -> None:
-    """Handle any text message as a query to the pipeline."""
+    """Handle text in topic threads → agent pipeline. Only fires inside topics, not General."""
     if not is_allowed_user(message.from_user.id, message.from_user.username):
         await message.answer("Доступ ограничен.")
         return
