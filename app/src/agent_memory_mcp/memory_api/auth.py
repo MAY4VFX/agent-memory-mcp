@@ -59,80 +59,134 @@ async def get_api_key_by_hash(engine: AsyncEngine, key_hash: str) -> dict | None
 async def create_api_key_for_user(
     engine: AsyncEngine, telegram_id: int, name: str = "default", bonus_credits: int = 0,
 ) -> tuple[str, dict]:
-    """Create a new API key for a user. Returns (full_key, key_record)."""
+    """Create a new API key for a user. Returns (full_key, key_record).
+
+    bonus_credits is added to USER balance (not per-key).
+    """
     full_key, key_hash, key_prefix = generate_api_key()
     from sqlalchemy import text
     async with engine.begin() as conn:
         row = await conn.execute(
             text("""
-                INSERT INTO api_keys (key_hash, key_prefix, telegram_id, name, credits_balance)
-                VALUES (:h, :p, :tid, :n, :b)
-                RETURNING id, key_prefix, credits_balance
+                INSERT INTO api_keys (key_hash, key_prefix, telegram_id, name)
+                VALUES (:h, :p, :tid, :n)
+                RETURNING id, key_prefix
             """),
-            {"h": key_hash, "p": key_prefix, "tid": telegram_id, "n": name, "b": bonus_credits},
+            {"h": key_hash, "p": key_prefix, "tid": telegram_id, "n": name},
         )
         rec = dict(row.mappings().first())
-        if bonus_credits > 0:
-            await conn.execute(
-                text("""
-                    INSERT INTO credit_transactions (api_key_id, amount, type, balance_after)
-                    VALUES (:kid, :amt, 'bonus', :bal)
-                """),
-                {"kid": rec["id"], "amt": bonus_credits, "bal": bonus_credits},
-            )
+
+    # Add bonus to USER balance (not key)
+    if bonus_credits > 0:
+        balance = await topup_user_direct(engine, telegram_id, bonus_credits, tx_type="bonus")
+        rec["credits_balance"] = balance
+    else:
+        # Read current user balance
+        from sqlalchemy import text as sa_text
+        async with engine.begin() as conn:
+            r = await conn.execute(sa_text("SELECT points_balance FROM users WHERE telegram_id = :tid"), {"tid": telegram_id})
+            rec["credits_balance"] = r.scalar() or 0
+
     return full_key, rec
 
 
 async def charge_credits(engine: AsyncEngine, api_key_id: UUID, amount: int, endpoint: str) -> int:
-    """Deduct credits from API key. Returns new balance. Raises if insufficient."""
+    """Deduct points from USER balance (not per-key). Returns new balance."""
     from sqlalchemy import text
     async with engine.begin() as conn:
-        row = await conn.execute(
-            text("SELECT credits_balance FROM api_keys WHERE id = :id FOR UPDATE"),
+        # Get user from api_key
+        key_row = await conn.execute(
+            text("SELECT telegram_id FROM api_keys WHERE id = :id"),
             {"id": api_key_id},
+        )
+        tid = key_row.scalar()
+        if not tid:
+            raise ValueError("API key not found")
+
+        row = await conn.execute(
+            text("SELECT points_balance FROM users WHERE telegram_id = :tid FOR UPDATE"),
+            {"tid": tid},
         )
         balance = row.scalar()
         if balance is None or balance < amount:
-            raise ValueError(f"Insufficient credits: have {balance}, need {amount}")
+            raise ValueError(f"Insufficient points: have {balance}, need {amount}")
         new_balance = balance - amount
         await conn.execute(
             text("""
-                UPDATE api_keys
-                SET credits_balance = :nb, total_credits_used = total_credits_used + :amt, last_used_at = now()
-                WHERE id = :id
+                UPDATE users
+                SET points_balance = :nb, total_points_spent = total_points_spent + :amt
+                WHERE telegram_id = :tid
             """),
-            {"nb": new_balance, "amt": amount, "id": api_key_id},
+            {"nb": new_balance, "amt": amount, "tid": tid},
+        )
+        # Update last_used on the key
+        await conn.execute(
+            text("UPDATE api_keys SET last_used_at = now() WHERE id = :id"),
+            {"id": api_key_id},
         )
         await conn.execute(
             text("""
-                INSERT INTO credit_transactions (api_key_id, amount, type, endpoint, balance_after)
-                VALUES (:kid, :amt, 'usage', :ep, :bal)
+                INSERT INTO credit_transactions (api_key_id, telegram_id, amount, type, endpoint, balance_after)
+                VALUES (:kid, :tid, :amt, 'usage', :ep, :bal)
             """),
-            {"kid": api_key_id, "amt": -amount, "ep": endpoint, "bal": new_balance},
+            {"kid": api_key_id, "tid": tid, "amt": -amount, "ep": endpoint, "bal": new_balance},
         )
         return new_balance
 
 
 async def topup_credits(engine: AsyncEngine, api_key_id: UUID, amount: int, ton_tx_hash: str | None = None) -> int:
-    """Add credits to API key. Returns new balance."""
+    """Add points to USER balance. Returns new balance."""
     from sqlalchemy import text
     async with engine.begin() as conn:
-        row = await conn.execute(
-            text("SELECT credits_balance FROM api_keys WHERE id = :id FOR UPDATE"),
+        # Get user from api_key
+        key_row = await conn.execute(
+            text("SELECT telegram_id FROM api_keys WHERE id = :id"),
             {"id": api_key_id},
+        )
+        tid = key_row.scalar()
+        if not tid:
+            raise ValueError("API key not found")
+
+        row = await conn.execute(
+            text("SELECT points_balance FROM users WHERE telegram_id = :tid FOR UPDATE"),
+            {"tid": tid},
         )
         balance = row.scalar() or 0
         new_balance = balance + amount
         await conn.execute(
-            text("UPDATE api_keys SET credits_balance = :nb WHERE id = :id"),
-            {"nb": new_balance, "id": api_key_id},
+            text("UPDATE users SET points_balance = :nb WHERE telegram_id = :tid"),
+            {"nb": new_balance, "tid": tid},
         )
         await conn.execute(
             text("""
-                INSERT INTO credit_transactions (api_key_id, amount, type, ton_tx_hash, balance_after)
-                VALUES (:kid, :amt, 'topup', :tx, :bal)
+                INSERT INTO credit_transactions (api_key_id, telegram_id, amount, type, ton_tx_hash, balance_after)
+                VALUES (:kid, :tid, :amt, 'topup', :tx, :bal)
             """),
-            {"kid": api_key_id, "amt": amount, "tx": ton_tx_hash, "bal": new_balance},
+            {"kid": api_key_id, "tid": tid, "amt": amount, "tx": ton_tx_hash, "bal": new_balance},
+        )
+        return new_balance
+
+
+async def topup_user_direct(engine: AsyncEngine, telegram_id: int, amount: int, tx_type: str = "bonus") -> int:
+    """Add points directly to user (for bonus, no api_key needed). Returns new balance."""
+    from sqlalchemy import text
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            text("SELECT points_balance FROM users WHERE telegram_id = :tid FOR UPDATE"),
+            {"tid": telegram_id},
+        )
+        balance = row.scalar() or 0
+        new_balance = balance + amount
+        await conn.execute(
+            text("UPDATE users SET points_balance = :nb WHERE telegram_id = :tid"),
+            {"nb": new_balance, "tid": telegram_id},
+        )
+        await conn.execute(
+            text("""
+                INSERT INTO credit_transactions (telegram_id, amount, type, balance_after)
+                VALUES (:tid, :amt, :tp, :bal)
+            """),
+            {"tid": telegram_id, "amt": amount, "tp": tx_type, "bal": new_balance},
         )
         return new_balance
 
