@@ -114,9 +114,14 @@ async def export_conversation(message: Message) -> None:
 
 # ------------------------------------------------------------------ Query handler
 
+_BUTTON_TEXTS = {"💰 Balance", "📡 Sources", "🔑 API Keys", "💎 Top Up", "📊 Usage", "❓ Help", "📱 Connect Telegram"}
+
 @router.message(F.text, F.message_thread_id.is_not(None))
 async def handle_text_query(message: Message) -> None:
     """Handle text in topic threads → agent pipeline. Only fires inside topics, not General."""
+    # Skip reply keyboard button presses that leaked into topics
+    if message.text.strip() in _BUTTON_TEXTS:
+        return
     if not is_allowed_user(message.from_user.id, message.from_user.username):
         await message.answer("Доступ ограничен.")
         return
