@@ -21,8 +21,8 @@ def create_api_app() -> FastAPI:
     from agent_memory_mcp.config import settings
     from agent_memory_mcp.memory_api.mcp_tools import mcp
 
-    # Build MCP sub-app
-    mcp_app = mcp.http_app(path="/")
+    # Build MCP sub-app (stateless = sessions survive server restarts)
+    mcp_app = mcp.http_app(path="/", stateless_http=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
