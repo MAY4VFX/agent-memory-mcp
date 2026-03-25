@@ -143,7 +143,7 @@ graph TB
     REST --> CUSTOM
 
     subgraph TON["💎 TON Payments"]
-        CR[Pay-per-query Credits]
+        CR[Pay-per-query Points]
     end
 
     TON -.-> Interface
@@ -317,9 +317,9 @@ curl https://agent.ai-vfx.com/api/v1/account/balance \
 |---------|-------------|
 | 🔑 **API Keys** | Create up to 20 keys, view prefixes, revoke anytime |
 | 📱 **Sources** | Add channels / groups / folders, monitor sync progress and message counts |
-| 💰 **Balance** | Check credits, view last transactions |
+| 💰 **Balance** | Check points balance, view last transactions |
 | 💎 **Top Up** | Pay with TON directly from Tonkeeper or any TON wallet |
-| 📊 **Usage** | Credits spent by endpoint over 24 hours |
+| 📊 **Usage** | Points spent by endpoint over 24 hours |
 | ❓ **Help** | Quick start guide and integration instructions |
 
 ---
@@ -334,7 +334,7 @@ curl https://agent.ai-vfx.com/api/v1/account/balance \
 
 ### Top-Up Options
 
-| Amount | Points (at ~$3.30/TON) |
+| Amount | Points (approx.) |
 |--------|----------------------|
 | 0.5 TON | ~165 pts |
 | 1 TON | ~330 pts |
