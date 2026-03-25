@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/banner.jpeg" alt="Agent Memory MCP — Telegram to AI Agent pipeline" width="100%" />
+
 # 🧠 Agent Memory MCP
 
 **Persistent memory layer for Telegram AI agents**
