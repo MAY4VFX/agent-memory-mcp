@@ -478,22 +478,41 @@ async def get_agent_context(owner_id: int, task: str, scope: str) -> dict:
 
 
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
-    """Resolve a scope string to domain IDs for the owner."""
+    """Resolve a scope string to domain IDs for the owner.
+
+    Supported formats:
+      - None / "" → all domains
+      - "@username" → single channel
+      - "folder:Name" → all channels in a named group/folder
+      - UUID string → single domain by ID
+    """
     domains = await db_q.list_domains(async_engine, owner_id)
     if not domains:
         return []
 
     if not scope:
-        # All domains for this owner
         return [d["id"] for d in domains]
 
-    # Try to match by channel_username
+    # folder:Name → resolve via domain_groups
+    if scope.lower().startswith("folder:"):
+        folder_name = scope[7:].strip()
+        from agent_memory_mcp.db import queries_groups as gq
+        groups = await gq.list_groups(async_engine, owner_id)
+        for g in groups:
+            if g["name"].lower() == folder_name.lower():
+                members = await gq.get_group_domains(async_engine, g["id"])
+                if members:
+                    return [m["domain_id"] for m in members]
+        # Folder not found — fall through to all
+        return [d["id"] for d in domains]
+
+    # @username → single channel
     for d in domains:
         username = d.get("channel_username", "")
         if scope.lstrip("@").lower() == username.lower():
             return [d["id"]]
 
-    # Try UUID
+    # UUID → single domain
     try:
         uid = UUID(scope)
         return [uid]
