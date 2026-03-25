@@ -60,12 +60,18 @@ async def run_agent_pipeline(
         channel_ids: list[int] = []
         channel_username = ""
         domain_id_str = ""
+        all_sources: list[dict] = []
         for did in domain_ids:
             domain = await db_q.get_domain(engine, did)
             if domain:
                 channel_ids.append(domain["channel_id"])
                 channel_username = channel_username or domain.get("channel_username", "")
                 domain_id_str = domain_id_str or str(domain["id"])
+                all_sources.append({
+                    "channel_username": domain.get("channel_username", ""),
+                    "display_name": domain.get("display_name", ""),
+                    "message_count": domain.get("message_count", 0),
+                })
 
         if not domain_id_str:
             log.warning("agent_no_domain", domain_ids=domain_ids)
@@ -99,7 +105,10 @@ async def run_agent_pipeline(
             history_messages.append({"role": msg.role, "content": msg.content})
 
         # --- Build system prompt ---
-        system_prompt = build_agent_system_prompt(channel_username, schema)
+        system_prompt = build_agent_system_prompt(
+            channel_username, schema,
+            sources=all_sources if len(all_sources) > 1 else None,
+        )
 
         # --- Create agent context ---
         ctx = AgentContext(

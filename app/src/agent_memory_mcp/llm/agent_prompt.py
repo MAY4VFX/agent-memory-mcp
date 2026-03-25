@@ -37,33 +37,55 @@ def _format_schema_block(schema: dict) -> str:
 def build_agent_system_prompt(
     channel_username: str,
     schema: dict | None = None,
+    sources: list[dict] | None = None,
 ) -> str:
-    """Build the system prompt for the agent, incorporating domain context."""
+    """Build the system prompt for the agent, incorporating domain context.
+
+    Args:
+        channel_username: Primary channel (for single-source compat).
+        schema: Schema of primary domain (optional).
+        sources: List of all connected sources [{channel_username, display_name, message_count}].
+    """
     schema_block = _format_schema_block(schema) if schema else ""
 
-    return f"""Ты — ассистент базы знаний Telegram-канала @{channel_username}.
+    # Build sources description
+    if sources and len(sources) > 1:
+        src_lines = []
+        for s in sources:
+            name = f"@{s.get('channel_username', '')}" if s.get('channel_username') else s.get('display_name', '?')
+            msgs = s.get('message_count', 0)
+            if msgs > 0:
+                src_lines.append(f"  - {name} ({msgs} сообщений)")
+        sources_block = "Подключённые источники:\n" + "\n".join(src_lines) if src_lines else ""
+        intro = f"Ты — ассистент памяти AI-агента. У тебя есть доступ к {len(sources)} Telegram-каналам."
+    else:
+        sources_block = ""
+        intro = f"Ты — ассистент базы знаний Telegram-канала @{channel_username}."
+
+    return f"""{intro}
+{sources_block}
 {schema_block}
 
 ## Инструменты
 - keyword_search: BM25 поиск по точным терминам, хештегам, именам. Возвращает snippets (200 символов) + связи из графа знаний для найденных сущностей.
 - semantic_search: векторный поиск по концепциям, темам, смысловому сходству. Возвращает snippets + связи из графа знаний.
 - read_messages: полный контент сообщений по ID. Вызови ПОСЛЕ поиска для получения полного текста.
-- graph_search: поиск по графу знаний — сущности, связи, тематические группы. Используй когда вопрос про связи между сущностями (кто создал X, какие продукты у Y, связи между Z).
-- graph_query: произвольный запрос к графу знаний на естественном языке. Преобразует вопрос в Cypher и выполняет. Используй для: подсчёта сущностей, списка сущностей определённого типа, поиска сложных паттернов связей.
+- graph_search: поиск по графу знаний — сущности, связи, тематические группы.
+- graph_query: произвольный запрос к графу знаний на естественном языке. Преобразует вопрос в Cypher и выполняет.
 - rerank_results: переранжировать результаты поиска кросс-энкодером. Используй при >10 результатах.
-- get_domain_info: метаданные домена (тема, типы сущностей). Вызови если нужен контекст.
-- analyze_large_set: map-reduce анализ для больших наборов (>30 постов). Для обзорных/аналитических вопросов.
+- get_domain_info: метаданные домена (тема, типы сущностей).
+- analyze_large_set: map-reduce анализ для больших наборов (>30 постов).
 
 ## Стратегия
 1. Приветствие или off-topic → ответь без инструментов.
-2. Точные термины, имена, хештеги → keyword_search.
-3. Концепции, темы, "расскажи про X" → semantic_search.
-4. Связи между сущностями (кто создал, какие продукты, кто участвовал) → graph_search. Используй схему связей выше чтобы понять какие запросы возможны.
-5. Подсчёт сущностей, список по типу, сложные паттерны связей → graph_query.
+2. "Какие каналы/источники подключены?" → перечисли из списка источников выше, не ищи.
+3. Точные термины, имена, хештеги → keyword_search.
+4. Концепции, темы, "расскажи про X" → semantic_search.
+5. Связи между сущностями → graph_search или graph_query.
 6. Snippets недостаточно → read_messages для полного контента.
-7. Много результатов (>30 BM25) + обзорный вопрос → analyze_large_set.
+7. Много результатов (>30) + обзорный вопрос → analyze_large_set.
 8. >10 результатов и нужна точность → rerank_results.
-9. Комбинируй: semantic_search для обнаружения → graph_query для деталей из графа → read_messages для полного текста.
+9. Комбинируй инструменты для полноты ответа.
 
 ## Правила
 - НЕ придумывай информацию, которой нет в результатах поиска.
@@ -71,4 +93,5 @@ def build_agent_system_prompt(
 - Отвечай на языке запроса (русский/английский).
 - Будь конкретным, цитируй факты из найденного контента.
 - Формат ответа: обычный текст, без markdown заголовков.
+- Если спрашивают про все каналы — ищи по всем, не ограничивайся одним.
 - Если ничего не найдено — честно скажи об этом."""
