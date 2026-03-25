@@ -221,18 +221,137 @@ async def sync_status(owner_id: int) -> dict:
 
 
 async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
-    """Generate a digest for a scope and period."""
-    return {"digest": "Digest generation not yet implemented", "period": period}
+    """Generate a digest via map-reduce clustering."""
+    from datetime import datetime, timedelta, timezone
+    from agent_memory_mcp.digest.clustering import cluster_messages, deduplicate, embed_messages
+    from agent_memory_mcp.llm.client import llm_call, llm_call_json
+    from agent_memory_mcp.llm.digest_prompts import MAP_DIGEST_SYSTEM, REDUCE_DIGEST_SYSTEM
+    from agent_memory_mcp.storage.embedding_client import EmbeddingClient
+
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"digest": "No sources connected.", "period": period}
+
+    # Parse period
+    period_days = {"1d": 1, "3d": 3, "7d": 7, "14d": 14, "30d": 30}.get(period, 7)
+    since = datetime.now(timezone.utc) - timedelta(days=period_days)
+
+    messages = await db_q.get_messages_since(async_engine, domain_ids, since, limit=200)
+    if not messages:
+        return {"digest": "No messages found for this period.", "period": period, "message_count": 0}
+
+    # Deduplicate and cluster
+    messages = deduplicate(messages)
+    embedder = EmbeddingClient()
+    try:
+        embedded = await embed_messages(messages, embedder)
+        clusters = cluster_messages(embedded)
+    finally:
+        await embedder.close()
+
+    if not clusters:
+        return {"digest": "Not enough messages to generate digest.", "period": period}
+
+    # Map phase: summarize each cluster
+    import asyncio
+    summaries = []
+    for cluster in clusters[:10]:  # max 10 clusters
+        texts = "\n\n".join(m["content"][:300] for m in cluster.messages[:20] if m.get("content"))
+        try:
+            summary = await llm_call(
+                model="tier1/extraction",
+                messages=[
+                    {"role": "system", "content": MAP_DIGEST_SYSTEM},
+                    {"role": "user", "content": texts},
+                ],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            summaries.append(summary)
+        except Exception:
+            log.warning("digest_map_failed", exc_info=True)
+
+    if not summaries:
+        return {"digest": "Failed to generate digest.", "period": period}
+
+    # Reduce phase: combine summaries
+    combined = "\n\n---\n\n".join(summaries)
+    try:
+        digest_text = await llm_call(
+            model="tier3/answer",
+            messages=[
+                {"role": "system", "content": REDUCE_DIGEST_SYSTEM},
+                {"role": "user", "content": combined},
+            ],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+    except Exception:
+        digest_text = "\n\n".join(summaries)
+
+    return {
+        "digest": digest_text,
+        "period": period,
+        "message_count": len(messages),
+        "cluster_count": len(clusters),
+    }
 
 
 async def get_decisions(owner_id: int, scope: str, topic: str | None = None) -> dict:
-    """Extract decisions from memory."""
-    return {"decisions": [], "topic": topic}
+    """Extract decisions, action items, and open questions from memory."""
+    from agent_memory_mcp.decision_pipeline.extractor import extract_decisions
+
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"decisions": [], "topic": topic, "message": "No sources connected."}
+
+    items = await extract_decisions(
+        engine=async_engine,
+        domain_ids=domain_ids,
+        topic=topic,
+        period_days=30,
+    )
+
+    # Group by type
+    decisions = [i for i in items if i["type"] == "decision"]
+    actions = [i for i in items if i["type"] == "action_item"]
+    questions = [i for i in items if i["type"] == "open_question"]
+
+    return {
+        "decisions": decisions,
+        "action_items": actions,
+        "open_questions": questions,
+        "total": len(items),
+        "topic": topic,
+    }
 
 
 async def get_agent_context(owner_id: int, task: str, scope: str) -> dict:
-    """Build a full context package for an agent task."""
-    return {"context": "Context package not yet implemented", "task": task}
+    """Build a full context package for an agent task.
+
+    Combines search + decisions + digest into one package.
+    """
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"context": "No sources connected.", "task": task}
+
+    # Run search, decisions in parallel
+    import asyncio
+    search_task = asyncio.create_task(
+        search_memory(query=task, owner_id=owner_id, scope=scope, limit=5)
+    )
+    decisions_task = asyncio.create_task(
+        get_decisions(owner_id=owner_id, scope=scope)
+    )
+
+    search_result, decisions_result = await asyncio.gather(search_task, decisions_task)
+
+    return {
+        "task": task,
+        "search": search_result,
+        "decisions": decisions_result,
+        "source_count": len(domain_ids),
+    }
 
 
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
