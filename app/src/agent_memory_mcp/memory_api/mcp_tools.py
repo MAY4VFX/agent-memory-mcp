@@ -31,8 +31,10 @@ mcp = FastMCP(
     ),
 )
 
-# Cache: key_hash → api_key record
-_key_cache: dict[str, dict] = {}
+# Cache: key_hash → (api_key record, timestamp) — 5 min TTL
+import time as _time
+_key_cache: dict[str, tuple[dict, float]] = {}
+_KEY_CACHE_TTL = 300
 
 
 async def _resolve_owner(ctx: Context | None) -> int:
@@ -54,7 +56,7 @@ async def _resolve_owner(ctx: Context | None) -> int:
             key_hash = hashlib.sha256(token.encode()).hexdigest()
             api_key = await get_api_key_by_hash(async_engine, key_hash)
             if api_key and api_key["is_active"]:
-                _key_cache[key_hash] = api_key
+                _key_cache[key_hash] = (api_key, _time.monotonic())
                 return api_key["telegram_id"]
     except Exception:
         pass
@@ -82,13 +84,16 @@ async def _resolve_api_key(ctx: Context | None) -> dict | None:
     key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
 
     if key_hash in _key_cache:
-        return _key_cache[key_hash]
+        cached, ts = _key_cache[key_hash]
+        if _time.monotonic() - ts < _KEY_CACHE_TTL:
+            return cached
+        del _key_cache[key_hash]
 
     api_key = await get_api_key_by_hash(async_engine, key_hash)
     if not api_key or not api_key["is_active"]:
         return None
 
-    _key_cache[key_hash] = api_key
+    _key_cache[key_hash] = (api_key, _time.monotonic())
     return api_key
 
 
