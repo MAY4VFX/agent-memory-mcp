@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 
 from agent_memory_mcp.memory_api import schemas as S
 from agent_memory_mcp.memory_api import service
-from agent_memory_mcp.memory_api.auth import require_credits, verify_api_key
+from agent_memory_mcp.memory_api.auth import CREDIT_COSTS, require_credits, verify_api_key
 
 log = structlog.get_logger(__name__)
 
@@ -47,11 +47,36 @@ async def get_balance(api_key: dict = Depends(verify_api_key)):
 
 @router.get("/sync-status")
 async def get_sync_status(api_key: dict = Depends(verify_api_key)):
-    result = await service.sync_status(api_key["telegram_id"])
+    return await service.sync_status(api_key["telegram_id"])
+
+
+@router.post("/sources/add")
+async def add_source(
+    req: S.AddSourceRequest,
+    api_key: dict = Depends(verify_api_key),  # Free — don't charge for onboarding
+):
+    result = await service.add_source(
+        owner_id=api_key["telegram_id"],
+        handle=req.handle,
+        source_type=req.source_type,
+        sync_range=req.sync_range,
+    )
     return result
 
 
-# --- Paid endpoints ---
+@router.delete("/sources/{source_id}")
+async def remove_source(source_id: UUID, api_key: dict = Depends(verify_api_key)):
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db.engine import async_engine
+    domain = await db_q.get_domain(async_engine, source_id)
+    if not domain or domain["owner_id"] != api_key["telegram_id"]:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Source not found")
+    await db_q.delete_domain(async_engine, source_id)
+    return {"status": "deleted", "source_id": str(source_id)}
+
+
+# --- Paid endpoints (costs from CREDIT_COSTS) ---
 
 @router.post("/memory/search")
 async def search_memory(
@@ -64,38 +89,7 @@ async def search_memory(
         scope=req.scope,
         limit=req.limit,
     )
-    return {
-        **result,
-        "credits_used": 3,
-        "balance_after": api_key["credits_balance"],
-    }
-
-
-@router.post("/sources/add")
-async def add_source(
-    req: S.AddSourceRequest,
-    api_key: dict = Depends(require_credits("sources/add")),
-):
-    result = await service.add_source(
-        owner_id=api_key["telegram_id"],
-        handle=req.handle,
-        source_type=req.source_type,
-        sync_range=req.sync_range,
-    )
-    return {**result, "credits_used": 5, "balance_after": api_key["credits_balance"]}
-
-
-@router.post("/sources/sync")
-async def sync_source(
-    req: S.SyncSourceRequest,
-    api_key: dict = Depends(require_credits("sources/sync")),
-):
-    return {"status": "queued", "source_id": str(req.source_id), "credits_used": 5}
-
-
-@router.delete("/sources/{source_id}")
-async def remove_source(source_id: UUID, api_key: dict = Depends(verify_api_key)):
-    return {"status": "deleted", "source_id": str(source_id)}
+    return {**result, "points_used": CREDIT_COSTS["memory/search"], "balance": api_key["credits_balance"]}
 
 
 @router.post("/digest")
@@ -108,7 +102,7 @@ async def get_digest(
         scope=req.scope,
         period=req.period,
     )
-    return {**result, "credits_used": 10, "balance_after": api_key["credits_balance"]}
+    return {**result, "points_used": CREDIT_COSTS["digest"], "balance": api_key["credits_balance"]}
 
 
 @router.post("/decisions")
@@ -121,7 +115,7 @@ async def get_decisions(
         scope=req.scope,
         topic=req.topic,
     )
-    return {**result, "credits_used": 5, "balance_after": api_key["credits_balance"]}
+    return {**result, "points_used": CREDIT_COSTS["decisions"], "balance": api_key["credits_balance"]}
 
 
 @router.post("/memory/context")
@@ -134,7 +128,7 @@ async def get_agent_context(
         task=req.task,
         scope=req.scope,
     )
-    return {**result, "credits_used": 10, "balance_after": api_key["credits_balance"]}
+    return {**result, "points_used": CREDIT_COSTS["memory/context"], "balance": api_key["credits_balance"]}
 
 
 @router.post("/analysis/deep")
@@ -144,6 +138,6 @@ async def deep_analysis(
 ):
     return {
         "analysis": "Deep analysis not yet implemented",
-        "credits_used": 25,
-        "balance_after": api_key["credits_balance"],
+        "points_used": CREDIT_COSTS["analysis/deep"],
+        "balance": api_key["credits_balance"],
     }

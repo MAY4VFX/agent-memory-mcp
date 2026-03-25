@@ -486,8 +486,7 @@ async def cb_key_view(callback: CallbackQuery):
     text_msg = (
         f"🔑 <b>{k['name']}</b>\n\n"
         f"Prefix: <code>{k['key_prefix']}...</code>\n"
-        f"Balance: <b>(account-level)</b>\n"
-        f"Spent via key: {k['total_credits_used']} points\n"
+        f"Balance: <b>(shared across all keys)</b>\n"
         f"Created: {created}\n"
         f"Last used: {last_used}"
     )
@@ -585,12 +584,14 @@ async def btn_usage(message: Message):
     user_id = message.from_user.id
     from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
-        # Usage by endpoint (all time, by telegram_id)
+        # Usage by endpoint — check both telegram_id and api_key_id
         rows = await conn.execute(
             sa_text("""
                 SELECT endpoint, COUNT(*) as cnt, SUM(ABS(amount)) as total_pts
                 FROM credit_transactions
-                WHERE telegram_id = :tid AND type = 'usage'
+                WHERE (telegram_id = :tid
+                       OR api_key_id IN (SELECT id FROM api_keys WHERE telegram_id = :tid))
+                  AND type = 'usage'
                 GROUP BY endpoint ORDER BY total_pts DESC
             """),
             {"tid": user_id},
@@ -606,7 +607,12 @@ async def btn_usage(message: Message):
 
         # Total topped up
         topup_row = await conn.execute(
-            sa_text("SELECT SUM(amount) as total FROM credit_transactions WHERE telegram_id = :tid AND type IN ('topup', 'bonus')"),
+            sa_text("""
+                SELECT SUM(amount) as total FROM credit_transactions
+                WHERE (telegram_id = :tid
+                       OR api_key_id IN (SELECT id FROM api_keys WHERE telegram_id = :tid))
+                  AND type IN ('topup', 'bonus')
+            """),
             {"tid": user_id},
         )
         total_topup = topup_row.scalar() or 0
