@@ -95,13 +95,16 @@ async def add_source(
     source_type: str = "channel",
     sync_range: str = "3m",
 ) -> dict:
-    """Add a Telegram source for a user via their Telethon session."""
+    """Add a Telegram source for a user via their Telethon session.
+
+    source_type="folder" adds ALL channels from a Telegram folder at once.
+    Use list_folders() first to see available folders.
+    """
     from agent_memory_mcp.collector.pool import collector_pool
 
     if not collector_pool:
         return {"status": "error", "message": "Collector pool not initialized"}
 
-    # Check if user has Telegram connected
     uc = await collector_pool.get_collector(owner_id)
     if not uc:
         return {
@@ -110,7 +113,16 @@ async def add_source(
             "bot_url": "https://t.me/AgentMemoryBot",
         }
 
-    # Resolve channel
+    # --- Folder import: add all channels from a Telegram folder ---
+    if source_type == "folder":
+        return await _add_folder(owner_id, uc, handle, sync_range)
+
+    # --- Single channel ---
+    return await _add_single_channel(owner_id, uc, handle, sync_range)
+
+
+async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -> dict:
+    """Add a single channel as a source."""
     try:
         info = await uc.resolve_channel(handle)
     except ValueError as e:
@@ -119,7 +131,6 @@ async def add_source(
         log.exception("resolve_channel_failed", handle=handle, owner_id=owner_id)
         return {"status": "error", "message": f"Failed to resolve channel: {e}"}
 
-    # Check if already added
     existing = await db_q.list_domains(async_engine, owner_id)
     for d in existing:
         if d["channel_id"] == info["channel_id"]:
@@ -130,8 +141,7 @@ async def add_source(
                 "message": f"@{info['username']} already connected.",
             }
 
-    # Create domain — scheduler will pick it up automatically
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     domain = await db_q.create_domain(
         async_engine,
         owner_id=owner_id,
@@ -144,8 +154,6 @@ async def add_source(
         display_name=info["title"],
         pinned=True,
     )
-
-    # Set next_sync_at = now so scheduler picks it up immediately
     await db_q.update_domain(
         async_engine, domain["id"],
         next_sync_at=datetime.now(timezone.utc),
@@ -159,6 +167,121 @@ async def add_source(
         "sync_range": sync_range,
         "message": f"✅ @{info['username']} добавлен. Синхронизация начнётся в течение 30 секунд.",
     }
+
+
+async def _add_folder(owner_id: int, uc, folder_name: str, sync_range: str) -> dict:
+    """Add all channels from a Telegram folder."""
+    from datetime import datetime, timezone
+    from agent_memory_mcp.db import queries_groups as gq
+
+    folders = await uc.get_folders()
+    if not folders:
+        return {"status": "error", "message": "No folders found. Make sure you have Telegram folders set up."}
+
+    # Find folder by name (case-insensitive) or ID
+    folder = None
+    for f in folders:
+        if f["title"].lower() == folder_name.lower():
+            folder = f
+            break
+        if str(f["id"]) == folder_name:
+            folder = f
+            break
+
+    if not folder:
+        available = ", ".join(f["title"] for f in folders)
+        return {
+            "status": "error",
+            "message": f"Folder '{folder_name}' not found. Available: {available}",
+        }
+
+    peers = folder["peers"]
+    if not peers:
+        return {"status": "error", "message": f"Folder '{folder['title']}' has no channels."}
+
+    # Create a group for this folder
+    group = await gq.create_group(
+        async_engine,
+        owner_id=owner_id,
+        name=folder["title"],
+        emoji="📁",
+        tg_folder_id=folder["id"],
+        sync_depth=sync_range,
+    )
+
+    # Add each channel
+    existing = await db_q.list_domains(async_engine, owner_id)
+    existing_cids = {d["channel_id"]: d["id"] for d in existing}
+
+    added = []
+    skipped = []
+    domain_ids = []
+
+    for peer in peers:
+        cid = peer["channel_id"]
+        if cid in existing_cids:
+            skipped.append(f"@{peer['username']}" if peer.get("username") else peer["title"])
+            domain_ids.append(existing_cids[cid])
+            continue
+
+        domain = await db_q.create_domain(
+            async_engine,
+            owner_id=owner_id,
+            channel_id=cid,
+            channel_username=peer.get("username", ""),
+            channel_name=peer["title"],
+            sync_depth=sync_range,
+            sync_frequency_minutes=60,
+            emoji="📁",
+            display_name=peer["title"],
+            pinned=False,
+        )
+        await db_q.update_domain(
+            async_engine, domain["id"],
+            next_sync_at=datetime.now(timezone.utc),
+        )
+        added.append(f"@{peer['username']}" if peer.get("username") else peer["title"])
+        domain_ids.append(domain["id"])
+
+    # Link all domains to group
+    await gq.add_domains_to_group(async_engine, group["id"], domain_ids)
+
+    return {
+        "status": "queued",
+        "folder": folder["title"],
+        "group_id": str(group["id"]),
+        "added": added,
+        "skipped": skipped,
+        "total_channels": len(peers),
+        "sync_range": sync_range,
+        "message": f"✅ Папка '{folder['title']}' — добавлено {len(added)} каналов, пропущено {len(skipped)} (уже были).",
+    }
+
+
+async def list_folders(owner_id: int) -> list[dict]:
+    """List user's Telegram folders with channel counts."""
+    from agent_memory_mcp.collector.pool import collector_pool
+
+    if not collector_pool:
+        return []
+
+    uc = await collector_pool.get_collector(owner_id)
+    if not uc:
+        return []
+
+    folders = await uc.get_folders()
+    return [
+        {
+            "id": f["id"],
+            "title": f["title"],
+            "channel_count": len(f["peers"]),
+            "channels": [
+                f"@{p['username']}" if p.get("username") else p["title"]
+                for p in f["peers"]
+            ],
+        }
+        for f in folders
+    ]
 
 
 async def check_telegram_auth(owner_id: int) -> dict:

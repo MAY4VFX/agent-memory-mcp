@@ -130,21 +130,39 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
 
 @mcp.tool()
 async def add_source(handle: str, source_type: str = "channel", sync_range: str = "3m", ctx: Context = None) -> str:
-    """Connect a Telegram channel or group as a memory source.
+    """Connect a Telegram channel, group, or entire folder as a memory source.
+
+    For single channels: handle = @username or t.me/link
+    For folders: set source_type="folder" and handle = folder name (use list_folders to see available).
+    Adding a folder imports ALL channels in it at once.
 
     Args:
-        handle: Channel/group identifier — @username or t.me/link.
-        source_type: Type of source: channel, group, or folder.
+        handle: Channel @username (or folder name when source_type="folder").
+        source_type: "channel" for single channel, "folder" to import entire Telegram folder.
         sync_range: How far back to sync: 1w, 1m, 3m, 6m, or 1y. Default: 3m.
 
     Returns:
-        Status of the source addition and sync job.
+        Status of the source addition. For folders: list of added and skipped channels.
     """
     owner_id = await _resolve_owner(ctx)
     result = await service.add_source(
         owner_id=owner_id, handle=handle, source_type=source_type, sync_range=sync_range,
     )
     return _ok(result, credits_used=5)
+
+
+@mcp.tool()
+async def list_folders(ctx: Context = None) -> str:
+    """List user's Telegram folders with their channels.
+
+    Use this to discover available folders before adding them with add_source(source_type="folder").
+
+    Returns:
+        List of Telegram folders with channel names and counts.
+    """
+    owner_id = await _resolve_owner(ctx)
+    folders = await service.list_folders(owner_id=owner_id)
+    return _ok({"folders": folders, "count": len(folders)})
 
 
 @mcp.tool()
