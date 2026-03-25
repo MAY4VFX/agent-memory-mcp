@@ -215,18 +215,25 @@ def require_credits(endpoint: str):
         return verify_api_key  # free endpoint, just verify key
 
     async def _dep(api_key: dict = Depends(verify_api_key)) -> dict:
-        if api_key["credits_balance"] < cost:
+        # Read balance from USERS table (not api_keys)
+        from sqlalchemy import text
+        async with async_engine.begin() as conn:
+            row = await conn.execute(
+                text("SELECT points_balance FROM users WHERE telegram_id = :tid"),
+                {"tid": api_key["telegram_id"]},
+            )
+            balance = row.scalar() or 0
+
+        if balance < cost:
             raise HTTPException(
                 status_code=402,
                 detail={
-                    "error": "insufficient_credits",
-                    "balance": api_key["credits_balance"],
+                    "error": "insufficient_points",
+                    "balance": balance,
                     "required": cost,
                     "topup_url": "https://t.me/AgentMemoryBot?start=topup",
                 },
             )
-        # Charge will happen after successful response via middleware/callback
-        # For now, charge immediately
         new_balance = await charge_credits(async_engine, api_key["id"], cost, endpoint)
         api_key["credits_balance"] = new_balance
         api_key["_credits_charged"] = cost
