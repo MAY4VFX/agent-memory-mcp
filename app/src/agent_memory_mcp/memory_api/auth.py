@@ -16,17 +16,14 @@ from agent_memory_mcp.db.engine import async_engine
 
 log = structlog.get_logger(__name__)
 
-# Credit costs per endpoint
+# Point costs per endpoint (1 point ≈ $0.01)
 CREDIT_COSTS: dict[str, int] = {
-    "memory/search": 3,
-    "memory/context": 10,
-    "digest": 10,
-    "decisions": 5,
-    "questions": 5,
-    "analysis/deep": 25,
-    "sources/add": 5,
-    "sources/sync": 5,
-    # Free endpoints: sources (GET), account/*, health
+    "search": 3,
+    "digest": 25,
+    "decisions": 12,
+    "agent_context": 15,
+    "analysis/deep": 50,
+    # Free: add_source, list, status, auth, health
 }
 
 
