@@ -34,7 +34,7 @@ _TOPUP_OPTIONS = [
 ]
 
 
-@router.message(F.message_thread_id.is_(None), F.text == "💎 Top Up")
+@router.message(F.text == "💎 Top Up")
 async def btn_topup(message: Message):
     """Show top-up amount selection with live TON price."""
     ton_price = await get_ton_price_usd()
