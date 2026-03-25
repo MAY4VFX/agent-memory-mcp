@@ -170,7 +170,9 @@ async def btn_balance(message: Message):
         rows = await conn.execute(
             sa_text("""
                 SELECT amount, type, endpoint, created_at
-                FROM credit_transactions WHERE telegram_id = :tid
+                FROM credit_transactions
+                WHERE telegram_id = :tid
+                   OR api_key_id IN (SELECT id FROM api_keys WHERE telegram_id = :tid)
                 ORDER BY created_at DESC LIMIT 7
             """),
             {"tid": user_id},
@@ -652,13 +654,16 @@ async def btn_help(message: Message):
 
 # --- Text in General → create new topic thread ---
 
-@router.message(_GENERAL, F.text)
-async def general_text_to_topic(message: Message):
+@router.message(_GENERAL, F.text, ~F.text.startswith("/"))
+async def general_text_to_topic(message: Message, state: FSMContext):
     """User typed text in General topic → create a new thread for agent chat.
 
-    This is the last handler for General — catches any text that didn't
-    match a button (💰, 📡, 🔑, etc).
+    Only fires when no FSM state is active (to not interfere with key naming etc).
     """
+    # Don't create topic if user is in the middle of an FSM flow
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
     text = message.text.strip()
     if not text:
         return
