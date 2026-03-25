@@ -570,43 +570,65 @@ async def cb_key_delete(callback: CallbackQuery):
 
 @router.message(F.text == "📊 Usage")
 async def btn_usage(message: Message):
-    """Show usage statistics."""
+    """Show usage statistics across ALL user's keys."""
     user_id = message.from_user.id
-    from sqlalchemy import text
+    from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
-        row = await conn.execute(
-            text("SELECT id FROM api_keys WHERE telegram_id = :tid AND is_active = true LIMIT 1"),
+        # Get all key IDs (active and inactive) for this user
+        key_rows = await conn.execute(
+            sa_text("SELECT id FROM api_keys WHERE telegram_id = :tid"),
             {"tid": user_id},
         )
-        key = row.mappings().first()
-        if not key:
-            await message.answer("No API key found.")
+        key_ids = [r["id"] for r in key_rows.mappings().all()]
+
+        if not key_ids:
+            await message.answer("No API keys found.")
             return
 
+        # Usage by endpoint (all time)
         rows = await conn.execute(
-            text("""
-                SELECT endpoint, COUNT(*) as cnt, SUM(ABS(amount)) as total_credits
+            sa_text("""
+                SELECT endpoint, COUNT(*) as cnt, SUM(ABS(amount)) as total_pts
                 FROM credit_transactions
-                WHERE api_key_id = :kid AND type = 'usage'
-                  AND created_at > now() - interval '24 hours'
-                GROUP BY endpoint ORDER BY total_credits DESC
+                WHERE api_key_id = ANY(:kids) AND type = 'usage'
+                GROUP BY endpoint ORDER BY total_pts DESC
             """),
-            {"kid": key["id"]},
+            {"kids": key_ids},
         )
         stats = rows.mappings().all()
 
-    lines = ["📊 <b>Usage today:</b>\n"]
+        # Total balance across active keys
+        bal_row = await conn.execute(
+            sa_text("SELECT SUM(credits_balance) as total FROM api_keys WHERE telegram_id = :tid AND is_active = true"),
+            {"tid": user_id},
+        )
+        total_balance = bal_row.scalar() or 0
+
+        # Total topped up
+        topup_row = await conn.execute(
+            sa_text("SELECT SUM(amount) as total FROM credit_transactions WHERE api_key_id = ANY(:kids) AND type IN ('topup', 'bonus')"),
+            {"kids": key_ids},
+        )
+        total_topup = topup_row.scalar() or 0
+
+    lines = [
+        f"📊 <b>Usage</b>\n",
+        f"Balance: <b>{total_balance}</b> points",
+        f"Total received: {total_topup} points",
+        "",
+        "<b>By operation:</b>",
+    ]
     total_req = 0
-    total_cr = 0
+    total_pts = 0
     for s in stats:
         ep = s["endpoint"] or "?"
-        lines.append(f"  {ep}: {s['cnt']} requests ({s['total_credits']} pts)")
+        lines.append(f"  {ep}: {s['cnt']} req ({s['total_pts']} pts)")
         total_req += s["cnt"]
-        total_cr += s["total_credits"]
+        total_pts += s["total_pts"]
     if not stats:
-        lines.append("  No requests today")
+        lines.append("  No usage yet")
     else:
-        lines.append(f"\n  Total: {total_req} requests ({total_cr} cr.)")
+        lines.append(f"\n  <b>Total: {total_req} requests, {total_pts} points spent</b>")
     await message.answer("\n".join(lines))
 
 
