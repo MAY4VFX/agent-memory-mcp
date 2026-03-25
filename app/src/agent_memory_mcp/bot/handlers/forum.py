@@ -215,13 +215,17 @@ async def btn_sources(message: Message):
 
 @router.message(F.text == "🔑 API Keys")
 async def btn_keys(message: Message):
-    """Show API keys."""
-    user_id = message.from_user.id
-    from sqlalchemy import text
+    """Show API keys with management buttons."""
+    await _show_keys(message, message.from_user.id)
+
+
+async def _show_keys(target, user_id: int, edit: bool = False):
+    """Render API keys list with inline buttons."""
+    from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
         rows = await conn.execute(
-            text("""
-                SELECT key_prefix, name, credits_balance, is_active, created_at, last_used_at
+            sa_text("""
+                SELECT id, key_prefix, name, credits_balance, is_active, created_at, last_used_at
                 FROM api_keys WHERE telegram_id = :tid ORDER BY created_at
             """),
             {"tid": user_id},
@@ -229,40 +233,81 @@ async def btn_keys(message: Message):
         keys = rows.mappings().all()
 
     if not keys:
-        await message.answer("No keys found. Press /start")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Create Key", callback_data="key:create")],
+        ])
+        text_msg = "🔑 <b>API Keys</b>\n\nNo keys yet."
+        if edit and hasattr(target, "edit_text"):
+            await target.edit_text(text_msg, reply_markup=kb)
+        else:
+            await target.answer(text_msg, reply_markup=kb)
         return
 
+    active_keys = [k for k in keys if k["is_active"]]
     lines = ["🔑 <b>Your API keys:</b>\n"]
     for i, k in enumerate(keys, 1):
         status = "✅" if k["is_active"] else "❌"
         last = k["last_used_at"].strftime("%d.%m %H:%M") if k.get("last_used_at") else "—"
         lines.append(f"{i}. <code>{k['key_prefix']}...</code> ({k['name']}) {status}")
-        lines.append(f"   Balance: {k['credits_balance']} • Last used: {last}")
-    lines.append("\nNew key: /newkey")
-    await message.answer("\n".join(lines))
+        lines.append(f"   Balance: {k['credits_balance']} • Used: {last}")
+
+    # Build inline keyboard
+    buttons = []
+    if len(active_keys) < 20:
+        buttons.append([InlineKeyboardButton(text="➕ Create Key", callback_data="key:create")])
+
+    # Delete buttons for each active key
+    delete_row = []
+    for i, k in enumerate(keys):
+        if k["is_active"]:
+            delete_row.append(
+                InlineKeyboardButton(
+                    text=f"🗑 {k['key_prefix'][:8]}...",
+                    callback_data=f"key:delete:{k['id']}",
+                )
+            )
+            if len(delete_row) == 2:
+                buttons.append(delete_row)
+                delete_row = []
+    if delete_row:
+        buttons.append(delete_row)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    text_msg = "\n".join(lines)
+
+    if edit and hasattr(target, "edit_text"):
+        await target.edit_text(text_msg, reply_markup=kb)
+    else:
+        await target.answer(text_msg, reply_markup=kb)
 
 
-@router.message(Command("newkey"))
-async def cmd_newkey(message: Message):
+@router.callback_query(F.data == "key:create")
+async def cb_key_create(callback: CallbackQuery):
     """Create a new API key."""
-    user_id = message.from_user.id
-    from sqlalchemy import text
+    user_id = callback.from_user.id
+    from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
         row = await conn.execute(
-            text("SELECT COUNT(*) FROM api_keys WHERE telegram_id = :tid"),
+            sa_text("SELECT COUNT(*) FROM api_keys WHERE telegram_id = :tid AND is_active = true"),
             {"tid": user_id},
         )
         count = row.scalar()
-    if count >= 5:
-        await message.answer("Maximum 5 keys per account.")
+
+    if count >= 20:
+        await callback.answer("Maximum 20 active keys.", show_alert=True)
         return
 
     full_key, rec = await create_api_key_for_user(async_engine, user_id, name=f"key-{count + 1}")
-    key_msg = await message.answer(
-        f"🔑 <b>New key created:</b>\n\n"
+
+    key_msg = await callback.message.answer(
+        f"🔑 <b>New key:</b>\n\n"
         f"<code>{full_key}</code>\n\n"
-        "⚠️ <b>Copy and save!</b> This message will be deleted in 60 seconds."
+        "⚠️ <b>Copy now!</b> Deletes in 60 seconds.",
     )
+    await callback.answer("Key created!")
+
+    # Refresh key list
+    await _show_keys(callback.message, user_id, edit=True)
 
     import asyncio
     await asyncio.sleep(60)
@@ -270,6 +315,34 @@ async def cmd_newkey(message: Message):
         await key_msg.delete()
     except Exception:
         pass
+
+
+@router.callback_query(F.data.startswith("key:delete:"))
+async def cb_key_delete(callback: CallbackQuery):
+    """Deactivate an API key."""
+    key_id = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+
+    from sqlalchemy import text as sa_text
+    async with async_engine.begin() as conn:
+        # Verify key belongs to user
+        row = await conn.execute(
+            sa_text("SELECT key_prefix, telegram_id FROM api_keys WHERE id = :kid"),
+            {"kid": key_id},
+        )
+        key = row.mappings().first()
+        if not key or key["telegram_id"] != user_id:
+            await callback.answer("Key not found.", show_alert=True)
+            return
+
+        # Deactivate (soft delete)
+        await conn.execute(
+            sa_text("UPDATE api_keys SET is_active = false WHERE id = :kid"),
+            {"kid": key_id},
+        )
+
+    await callback.answer(f"Key {key['key_prefix']}... deleted.")
+    await _show_keys(callback.message, user_id, edit=True)
 
 
 @router.message(F.text == "📊 Usage")
