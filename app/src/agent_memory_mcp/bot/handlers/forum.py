@@ -55,13 +55,18 @@ async def cmd_start(message: Message):
 
     from agent_memory_mcp.db import queries as db_q
 
-    from sqlalchemy import text
+    from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
         row = await conn.execute(
-            text("SELECT key_prefix, credits_balance FROM api_keys WHERE telegram_id = :tid AND is_active = true LIMIT 1"),
+            sa_text("SELECT key_prefix FROM api_keys WHERE telegram_id = :tid AND is_active = true LIMIT 1"),
             {"tid": user_id},
         )
         existing_key = row.mappings().first()
+        bal_row = await conn.execute(
+            sa_text("SELECT points_balance FROM users WHERE telegram_id = :tid"),
+            {"tid": user_id},
+        )
+        balance = bal_row.scalar() or 0
 
     # Check Telegram session
     tg_session = await db_q.get_telegram_session(async_engine, user_id)
@@ -91,7 +96,7 @@ async def cmd_start(message: Message):
     if existing_key:
         await message.answer(
             f"🔑 API key: <code>{existing_key['key_prefix']}...</code>\n"
-            f"💰 Balance: <b>{existing_key['credits_balance']}</b> points",
+            f"💰 Balance: <b>{balance}</b> points",
         )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -145,34 +150,34 @@ async def cb_create_first_key(callback: CallbackQuery):
 
 @router.message(F.text == "💰 Balance")
 async def btn_balance(message: Message):
-    """Show balance and recent transactions."""
+    """Show user-level balance and recent transactions."""
     user_id = message.from_user.id
-    from sqlalchemy import text
+    from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
         row = await conn.execute(
-            text("SELECT id, credits_balance, total_credits_used FROM api_keys WHERE telegram_id = :tid AND is_active = true LIMIT 1"),
+            sa_text("SELECT points_balance, total_points_spent FROM users WHERE telegram_id = :tid"),
             {"tid": user_id},
         )
-        key = row.mappings().first()
-        if not key:
-            await message.answer("No API key found. Press /start")
+        user = row.mappings().first()
+        if not user:
+            await message.answer("Account not found. Press /start")
             return
 
         rows = await conn.execute(
-            text("""
+            sa_text("""
                 SELECT amount, type, endpoint, created_at
-                FROM credit_transactions WHERE api_key_id = :kid
-                ORDER BY created_at DESC LIMIT 5
+                FROM credit_transactions WHERE telegram_id = :tid
+                ORDER BY created_at DESC LIMIT 7
             """),
-            {"kid": key["id"]},
+            {"tid": user_id},
         )
         txs = rows.mappings().all()
 
     lines = [
-        f"💰 <b>Balance: {key['credits_balance']} points</b>",
-        f"Total spent: {key['total_credits_used']}",
+        f"💰 <b>Balance: {user['points_balance']} points</b>",
+        f"Total spent: {user['total_points_spent']} points",
         "",
-        "<b>Recent transactions:</b>",
+        "<b>Recent:</b>",
     ]
     for tx in txs:
         sign = "+" if tx["amount"] > 0 else ""
@@ -475,8 +480,8 @@ async def cb_key_view(callback: CallbackQuery):
     text_msg = (
         f"🔑 <b>{k['name']}</b>\n\n"
         f"Prefix: <code>{k['key_prefix']}...</code>\n"
-        f"Balance: <b>{k['credits_balance']}</b> points\n"
-        f"Spent: {k['total_credits_used']} points\n"
+        f"Balance: <b>(account-level)</b>\n"
+        f"Spent via key: {k['total_credits_used']} points\n"
         f"Created: {created}\n"
         f"Last used: {last_used}"
     )
@@ -570,44 +575,33 @@ async def cb_key_delete(callback: CallbackQuery):
 
 @router.message(F.text == "📊 Usage")
 async def btn_usage(message: Message):
-    """Show usage statistics across ALL user's keys."""
+    """Show usage statistics for user."""
     user_id = message.from_user.id
     from sqlalchemy import text as sa_text
     async with async_engine.begin() as conn:
-        # Get all key IDs (active and inactive) for this user
-        key_rows = await conn.execute(
-            sa_text("SELECT id FROM api_keys WHERE telegram_id = :tid"),
-            {"tid": user_id},
-        )
-        key_ids = [r["id"] for r in key_rows.mappings().all()]
-
-        if not key_ids:
-            await message.answer("No API keys found.")
-            return
-
-        # Usage by endpoint (all time)
+        # Usage by endpoint (all time, by telegram_id)
         rows = await conn.execute(
             sa_text("""
                 SELECT endpoint, COUNT(*) as cnt, SUM(ABS(amount)) as total_pts
                 FROM credit_transactions
-                WHERE api_key_id = ANY(:kids) AND type = 'usage'
+                WHERE telegram_id = :tid AND type = 'usage'
                 GROUP BY endpoint ORDER BY total_pts DESC
             """),
-            {"kids": key_ids},
+            {"tid": user_id},
         )
         stats = rows.mappings().all()
 
-        # Total balance across active keys
+        # User balance
         bal_row = await conn.execute(
-            sa_text("SELECT SUM(credits_balance) as total FROM api_keys WHERE telegram_id = :tid AND is_active = true"),
+            sa_text("SELECT points_balance FROM users WHERE telegram_id = :tid"),
             {"tid": user_id},
         )
         total_balance = bal_row.scalar() or 0
 
         # Total topped up
         topup_row = await conn.execute(
-            sa_text("SELECT SUM(amount) as total FROM credit_transactions WHERE api_key_id = ANY(:kids) AND type IN ('topup', 'bonus')"),
-            {"kids": key_ids},
+            sa_text("SELECT SUM(amount) as total FROM credit_transactions WHERE telegram_id = :tid AND type IN ('topup', 'bonus')"),
+            {"tid": user_id},
         )
         total_topup = topup_row.scalar() or 0
 
