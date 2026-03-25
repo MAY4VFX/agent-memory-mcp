@@ -33,6 +33,10 @@ log = structlog.get_logger(__name__)
 
 router = Router()
 
+# Filter: only General topic (no thread_id) for reply keyboard buttons.
+# This prevents button presses from creating new topics.
+_GENERAL = F.message_thread_id.is_(None)
+
 
 def main_menu_kb(telegram_connected: bool = False) -> ReplyKeyboardMarkup:
     """Persistent reply keyboard. Shows 📱 Connect or 📡 Sources depending on auth."""
@@ -644,3 +648,43 @@ async def btn_help(message: Message):
         "• list_sources — list connected sources\n"
         "• get_agent_context — context package for agent tasks"
     )
+
+
+# --- Text in General → create new topic thread ---
+
+@router.message(_GENERAL, F.text)
+async def general_text_to_topic(message: Message):
+    """User typed text in General topic → create a new thread for agent chat.
+
+    This is the last handler for General — catches any text that didn't
+    match a button (💰, 📡, 🔑, etc).
+    """
+    text = message.text.strip()
+    if not text:
+        return
+
+    # Create forum topic with the message text as title
+    try:
+        topic = await message.bot.create_forum_topic(
+            chat_id=message.chat.id,
+            name=text[:128],
+        )
+        # Send the user's query into the new topic — it will be caught
+        # by conversations.py catch-all handler in that thread
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=topic.message_thread_id,
+            text=f"💬 <b>New chat:</b> {text[:100]}\n\n⏳ Processing...",
+        )
+        # Forward the original message to the new topic so conversations.py picks it up
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=topic.message_thread_id,
+            text=text,
+        )
+    except Exception:
+        log.exception("create_forum_topic_failed")
+        await message.answer(
+            "💬 Write your question and I'll create a new chat thread.\n"
+            "If topics aren't enabled, use the MCP tools directly."
+        )
