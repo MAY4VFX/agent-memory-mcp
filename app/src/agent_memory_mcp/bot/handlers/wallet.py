@@ -16,7 +16,9 @@ import structlog
 
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.db.engine import async_engine
-from agent_memory_mcp.ton.payments import build_ton_deeplink, generate_payment_id, process_topup
+from agent_memory_mcp.ton.payments import (
+    build_ton_deeplink, generate_payment_id, get_ton_price_usd, process_topup, ton_to_points,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -34,12 +36,12 @@ _TOPUP_OPTIONS = [
 
 @router.message(F.text == "💎 Top Up")
 async def btn_topup(message: Message):
-    """Show top-up amount selection."""
-    ppt = settings.credits_per_ton  # points per TON
+    """Show top-up amount selection with live TON price."""
+    ton_price = await get_ton_price_usd()
     rows = []
     row = []
     for amount, label in _TOPUP_OPTIONS:
-        pts = int(amount * ppt)
+        pts = ton_to_points(amount, ton_price)
         row.append(InlineKeyboardButton(
             text=f"{label} → {pts} pts",
             callback_data=f"topup:{amount}",
@@ -53,7 +55,8 @@ async def btn_topup(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer(
         "💎 <b>Top Up</b>\n\n"
-        f"Rate: 1 TON = {ppt} points (~$0.01 per point)\n"
+        f"TON rate: <b>${ton_price:.2f}</b> (live)\n"
+        "1 point = $0.01\n\n"
         "Choose amount:",
         reply_markup=kb,
     )
@@ -63,7 +66,8 @@ async def btn_topup(message: Message):
 async def cb_topup_amount(callback: CallbackQuery):
     """Generate payment link for selected amount."""
     amount_ton = float(callback.data.split(":")[1])
-    points = int(amount_ton * settings.credits_per_ton)
+    ton_price = await get_ton_price_usd()
+    points = ton_to_points(amount_ton, ton_price)
 
     if not settings.ton_wallet_address:
         await callback.answer("TON wallet not configured.", show_alert=True)
