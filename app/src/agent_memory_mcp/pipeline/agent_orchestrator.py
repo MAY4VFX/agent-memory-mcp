@@ -122,6 +122,7 @@ async def run_agent_pipeline(
             channel_username=channel_username,
             schema=schema,
             progress_callback=progress_callback,
+            since_date=since_date,
         )
 
         # --- Run agent loop ---
