@@ -31,11 +31,24 @@ async def list_sources(api_key: dict = Depends(verify_api_key)):
 
 @router.get("/account/balance")
 async def get_balance(api_key: dict = Depends(verify_api_key)):
+    from sqlalchemy import text
+    from agent_memory_mcp.db.engine import async_engine
+    async with async_engine.begin() as conn:
+        row = await conn.execute(
+            text("SELECT points_balance, total_points_spent FROM users WHERE telegram_id = :tid"),
+            {"tid": api_key["telegram_id"]},
+        )
+        user = row.mappings().first()
     return {
-        "balance": api_key["credits_balance"],
-        "total_used": api_key["total_credits_used"],
-        "api_key_prefix": api_key["key_prefix"],
+        "balance": user["points_balance"] if user else 0,
+        "total_spent": user["total_points_spent"] if user else 0,
     }
+
+
+@router.get("/sync-status")
+async def get_sync_status(api_key: dict = Depends(verify_api_key)):
+    result = await service.sync_status(api_key["telegram_id"])
+    return result
 
 
 # --- Paid endpoints ---
