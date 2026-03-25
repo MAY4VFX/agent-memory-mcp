@@ -12,7 +12,7 @@ Connect your channels and chats — your agent will never forget.
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/protocol-MCP-purple.svg)](https://modelcontextprotocol.io)
 [![TON](https://img.shields.io/badge/payments-TON-0088CC.svg)](https://ton.org)
-[![OpenClaw](https://img.shields.io/badge/skill-OpenClaw-orange.svg)](https://hub.openclaw.com/skills/agent-memory)
+[![OpenClaw](https://img.shields.io/badge/skill-OpenClaw-orange.svg)](https://clawhub.ai/may4vfx/telegram-agent-memory)
 
 [🤖 Telegram Bot](https://t.me/AgentMemoryBot) · [📦 PyPI Package](https://pypi.org/project/agent-memory-mcp/) · [🐾 OpenClaw Skill](#-openclaw-skill) · [🔌 API](#-quick-start) · [🔍 Search Architecture](#-search-architecture)
 
@@ -314,10 +314,10 @@ curl https://agent.ai-vfx.com/api/v1/account/balance \
 
 ## 🐾 OpenClaw Skill
 
-Agent Memory MCP is available as an [OpenClaw](https://openclaw.com) skill — install it in one click and use Telegram memory directly from any OpenClaw-compatible agent.
+Agent Memory MCP is available as a [ClawHub](https://clawhub.ai/may4vfx/telegram-agent-memory) skill — install it in one click and use Telegram memory directly from any OpenClaw-compatible agent.
 
 ```bash
-openclaw install agent-memory
+openclaw install may4vfx/telegram-agent-memory
 ```
 
 Or add manually — the skill definition is in [`integrations/openclaw-skill/SKILL.md`](integrations/openclaw-skill/SKILL.md).
@@ -330,7 +330,7 @@ Or add manually — the skill definition is in [`integrations/openclaw-skill/SKI
 
 **Self-onboarding**: if you don't have an API key yet, the skill walks you through setup — open [@AgentMemoryBot](https://t.me/AgentMemoryBot), connect Telegram, create a key, and you're ready.
 
-> 🔗 [Browse on OpenClaw Hub](https://hub.openclaw.com/skills/agent-memory)
+> 🔗 [Browse on ClawHub](https://clawhub.ai/may4vfx/telegram-agent-memory)
 
 ---
 
