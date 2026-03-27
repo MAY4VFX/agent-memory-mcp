@@ -121,6 +121,9 @@ async def _charge(ctx: Context | None, credits: int, endpoint: str) -> None:
     if not key:
         log.warning("charge_skipped_no_key", endpoint=endpoint, credits=credits)
         return
+    # Admin is exempt from billing
+    if key.get("telegram_id") == _admin_id():
+        return
     try:
         from agent_memory_mcp.memory_api.auth import charge_credits
         await charge_credits(async_engine, key["id"], credits, endpoint)
