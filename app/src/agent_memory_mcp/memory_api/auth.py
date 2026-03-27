@@ -91,8 +91,23 @@ async def create_api_key_for_user(
     return full_key, rec
 
 
+async def _is_admin(engine: AsyncEngine, api_key_id: UUID) -> bool:
+    """Check if the API key belongs to the admin user."""
+    from sqlalchemy import text
+    from agent_memory_mcp.config import settings
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            text("SELECT telegram_id FROM api_keys WHERE id = :id"),
+            {"id": api_key_id},
+        )
+        tid = row.scalar()
+        return tid == settings.admin_telegram_id
+
+
 async def charge_credits(engine: AsyncEngine, api_key_id: UUID, amount: int, endpoint: str) -> int:
     """Deduct points from USER balance (not per-key). Returns new balance."""
+    if await _is_admin(engine, api_key_id):
+        return 999999  # Admin is exempt from billing
     from sqlalchemy import text
     async with engine.begin() as conn:
         # Get user from api_key
@@ -216,6 +231,12 @@ def require_credits(endpoint: str):
         return verify_api_key  # free endpoint, just verify key
 
     async def _dep(api_key: dict = Depends(verify_api_key)) -> dict:
+        # Admin is exempt from billing
+        from agent_memory_mcp.config import settings
+        if api_key["telegram_id"] == settings.admin_telegram_id:
+            api_key["_credits_charged"] = 0
+            return api_key
+
         # Read balance from USERS table (not api_keys)
         from sqlalchemy import text
         async with async_engine.begin() as conn:
