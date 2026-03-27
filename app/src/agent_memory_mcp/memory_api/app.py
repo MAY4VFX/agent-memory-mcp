@@ -91,6 +91,10 @@ def create_api_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
     # REST API routes
     app.include_router(api_router)
 
