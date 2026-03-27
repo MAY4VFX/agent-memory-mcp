@@ -24,13 +24,44 @@ from agent_memory_mcp.storage.milvus_client import MilvusStorage
 log = structlog.get_logger()
 
 
+async def _wait_for_milvus(max_retries: int = 30, base_delay: float = 2.0) -> None:
+    """Wait for Milvus to become available with exponential backoff."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            milvus = MilvusStorage()
+            milvus.migrate_collection()
+            milvus.close()
+            return
+        except Exception:
+            delay = min(base_delay * (1.5 ** (attempt - 1)), 30.0)
+            log.warning("milvus_not_ready", attempt=attempt, retry_in=delay)
+            await asyncio.sleep(delay)
+    raise RuntimeError("Milvus unavailable after retries")
+
+
+async def _wait_for_db(max_retries: int = 30, base_delay: float = 2.0) -> None:
+    """Wait for PostgreSQL to become available."""
+    from sqlalchemy import text
+    from agent_memory_mcp.db.engine import async_engine
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with async_engine.begin() as conn:
+                await conn.execute(text("SELECT 1"))
+            return
+        except Exception:
+            delay = min(base_delay * (1.5 ** (attempt - 1)), 30.0)
+            log.warning("db_not_ready", attempt=attempt, retry_in=delay)
+            await asyncio.sleep(delay)
+    raise RuntimeError("PostgreSQL unavailable after retries")
+
+
 async def main() -> None:
     log.info("starting_agent_memory_mcp")
 
-    # Ensure Milvus collection exists (auto-migrates if schema changed)
-    milvus = MilvusStorage()
-    milvus.migrate_collection()
-    milvus.close()
+    # Wait for infrastructure to become available after server reboot
+    await _wait_for_db()
+    await _wait_for_milvus()
 
     # Connect Telethon (optional — needed for channel ingestion)
     collector = None
