@@ -17,6 +17,7 @@ import structlog
 from fastmcp import FastMCP, Context
 
 from agent_memory_mcp.memory_api import service
+from agent_memory_mcp.memory_api.service import ScopeNotFound
 from agent_memory_mcp.memory_api.auth import get_api_key_by_hash, CREDIT_COSTS
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db.engine import async_engine
@@ -38,7 +39,10 @@ mcp = FastMCP(
         "STRATEGY: For simple questions use search_memory. For precise control, "
         "combine keyword_search + vector_search, then read_messages for full text. "
         "Use graph_query for 'who/what is connected to X' questions.\n\n"
-        "MANAGEMENT: add_source, list_sources, remove_source, list_folders, sync_status, check_telegram_auth"
+        "SCOPING: Most tools accept a 'scope' parameter. Call list_scopes FIRST to discover "
+        "valid values: \"all\" for everything, \"folder:Name\" for channel groups, \"@username\" "
+        "for individual channels.\n\n"
+        "MANAGEMENT: add_source, list_sources, list_scopes, remove_source, list_folders, sync_status, check_telegram_auth"
     ),
 )
 
@@ -138,13 +142,23 @@ def _ok(result, credits_used: int = 0) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
 
+def _scope_not_found_response(e: ScopeNotFound) -> str:
+    """Format a helpful error when scope is not found."""
+    hints = e.available[:15] if e.available else []
+    return _ok({
+        "error": "scope_not_found",
+        "message": f"Scope '{e.scope}' not found. Use list_scopes to see available options.",
+        "available_scopes": hints,
+    })
+
+
 @mcp.tool()
 async def search_memory(query: str, scope: str | None = None, limit: int = 10, since: str | None = None, ctx: Context = None) -> str:
     """Search Telegram memory by semantic query.
 
     Args:
         query: What to search for in the memory.
-        scope: Optional scope. "@username" for one channel, "folder:Name" for a folder, or omit for all sources.
+        scope: Optional scope — "all", "@username", "folder:Name", or domain_id. Use list_scopes to see available options. Omit for all sources.
         limit: Maximum number of source references to return (default 10).
         since: Optional time filter. Examples: "2d" (last 2 days), "1w" (last week), "2026-03-23" (since date). Only returns messages after this date.
 
@@ -152,7 +166,10 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10, s
         Answer based on memory with source references.
     """
     owner_id = await _resolve_owner(ctx)
-    result = await service.search_memory(query=query, owner_id=owner_id, scope=scope, limit=limit, since=since)
+    try:
+        result = await service.search_memory(query=query, owner_id=owner_id, scope=scope, limit=limit, since=since)
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
     await _charge(ctx, 3, "search")
     return _ok(result, credits_used=3)
 
@@ -165,7 +182,7 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     If it takes too long, use keyword_search or vector_search for targeted queries instead.
 
     Args:
-        scope: Source scope — "@username", "folder:Name", or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Use list_scopes to see available options.
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
 
     Returns:
@@ -177,6 +194,8 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
             service.get_digest(owner_id=owner_id, scope=scope, period=period),
             timeout=180,
         )
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
     except asyncio.TimeoutError:
         result = {"digest": "Digest generation timed out. Try a shorter period or specific channel.", "period": period}
     await _charge(ctx, 25, "digest")
@@ -188,14 +207,17 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
     """Extract decisions, action items, and open questions from conversations.
 
     Args:
-        scope: Source scope — "@username", "folder:Name", or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Use list_scopes to see available options.
         topic: Optional topic to filter decisions by.
 
     Returns:
         List of decisions, action items, and unresolved questions.
     """
     owner_id = await _resolve_owner(ctx)
-    result = await service.get_decisions(owner_id=owner_id, scope=scope, topic=topic)
+    try:
+        result = await service.get_decisions(owner_id=owner_id, scope=scope, topic=topic)
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
     await _charge(ctx, 12, "decisions")
     return _ok(result, credits_used=12)
 
@@ -247,6 +269,46 @@ async def list_sources(ctx: Context = None) -> str:
     owner_id = await _resolve_owner(ctx)
     sources = await service.list_sources(owner_id=owner_id)
     return _ok({"sources": sources, "count": len(sources)})
+
+
+@mcp.tool()
+async def list_scopes(ctx: Context = None) -> str:
+    """List all available scopes for get_digest, search_memory, and other tools.
+
+    Call this FIRST to discover valid scope values before calling get_digest or search_memory.
+
+    Returns:
+        Available scopes: "all" for everything, "folder:Name" for channel groups, "@username" for individual channels.
+    """
+    owner_id = await _resolve_owner(ctx)
+    from agent_memory_mcp.db import queries_groups as gq
+
+    domains = await db_q.list_domains(async_engine, owner_id)
+    groups = await gq.list_groups(async_engine, owner_id)
+
+    scopes = [{"scope": "all", "label": f"All channels ({len(domains)})", "type": "all"}]
+
+    for g in groups:
+        members = await gq.get_group_domains(async_engine, g["id"])
+        channels = [f"@{m.get('channel_username', '?')}" for m in members]
+        scopes.append({
+            "scope": f"folder:{g['name']}",
+            "label": f"{g.get('emoji', '')} {g['name']} ({len(members)} channels)",
+            "type": "folder",
+            "channels": channels,
+        })
+
+    for d in domains:
+        username = d.get("channel_username")
+        if username:
+            scopes.append({
+                "scope": f"@{username}",
+                "label": d.get("display_name") or d.get("channel_name") or username,
+                "type": "channel",
+                "message_count": d.get("message_count", 0),
+            })
+
+    return _ok({"scopes": scopes, "count": len(scopes)})
 
 
 @mcp.tool()
@@ -308,13 +370,16 @@ async def get_agent_context(task: str, scope: str, ctx: Context = None) -> str:
 
     Args:
         task: Description of what the agent needs to accomplish.
-        scope: Source scope — "@username", "folder:Name", or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Use list_scopes to see available options.
 
     Returns:
         Structured context package with all relevant information.
     """
     owner_id = await _resolve_owner(ctx)
-    result = await service.get_agent_context(owner_id=owner_id, task=task, scope=scope)
+    try:
+        result = await service.get_agent_context(owner_id=owner_id, task=task, scope=scope)
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
     await _charge(ctx, 15, "agent_context")
     return _ok(result, credits_used=15)
 

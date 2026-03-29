@@ -521,20 +521,31 @@ async def get_agent_context(owner_id: int, task: str, scope: str) -> dict:
     }
 
 
+class ScopeNotFound(Exception):
+    """Raised when a named scope (folder/channel) cannot be resolved."""
+
+    def __init__(self, scope: str, available: list[str] | None = None):
+        self.scope = scope
+        self.available = available or []
+        super().__init__(f"Scope not found: {scope}")
+
+
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
     """Resolve a scope string to domain IDs for the owner.
 
     Supported formats:
-      - None / "" → all domains
+      - None / "" / "all" → all domains
       - "@username" → single channel
       - "folder:Name" → all channels in a named group/folder
       - UUID string → single domain by ID
+
+    Raises ScopeNotFound if an explicit scope (folder: or @channel) doesn't match.
     """
     domains = await db_q.list_domains(async_engine, owner_id)
     if not domains:
         return []
 
-    if not scope:
+    if not scope or scope.strip().lower() == "all":
         return [d["id"] for d in domains]
 
     # folder:Name → resolve via domain_groups
@@ -547,8 +558,8 @@ async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
                 members = await gq.get_group_domains(async_engine, g["id"])
                 if members:
                     return [m["id"] for m in members]
-        # Folder not found — fall through to all
-        return [d["id"] for d in domains]
+        available = [g["name"] for g in groups]
+        raise ScopeNotFound(scope, available)
 
     # @username → single channel
     for d in domains:
@@ -563,5 +574,9 @@ async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
     except ValueError:
         pass
 
-    # Default: all
-    return [d["id"] for d in domains]
+    # Nothing matched — raise with available options
+    available_channels = [f"@{d['channel_username']}" for d in domains if d.get("channel_username")]
+    from agent_memory_mcp.db import queries_groups as gq
+    groups = await gq.list_groups(async_engine, owner_id)
+    available_folders = [f"folder:{g['name']}" for g in groups]
+    raise ScopeNotFound(scope, available_folders + available_channels)
