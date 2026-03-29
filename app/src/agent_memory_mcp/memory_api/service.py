@@ -386,10 +386,13 @@ async def sync_status(owner_id: int) -> dict:
 
 async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     """Generate a digest via map-reduce clustering."""
+    import re
     from datetime import datetime, timedelta, timezone
     from agent_memory_mcp.digest.clustering import cluster_messages, deduplicate, embed_messages
     from agent_memory_mcp.llm.client import llm_call, llm_call_json
-    from agent_memory_mcp.llm.digest_prompts import MAP_DIGEST_SYSTEM, REDUCE_DIGEST_SYSTEM
+    from agent_memory_mcp.llm.digest_prompts import (
+        CLUSTER_LABEL_PROMPT, MAP_DIGEST_SYSTEM, REDUCE_DIGEST_SYSTEM,
+    )
     from agent_memory_mcp.storage.embedding_client import EmbeddingClient
 
     domain_ids = await _resolve_scope(owner_id, scope)
@@ -403,6 +406,13 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     messages = await db_q.get_messages_since(async_engine, domain_ids, since, limit=200)
     if not messages:
         return {"digest": "No messages found for this period.", "period": period, "message_count": 0}
+
+    # Build domain_id → username map for links
+    domain_username_map: dict[str, str] = {}
+    for did in domain_ids:
+        d = await db_q.get_domain(async_engine, did)
+        if d and d.get("channel_username"):
+            domain_username_map[str(d["id"])] = d["channel_username"]
 
     # Embed → deduplicate → cluster
     embedder = EmbeddingClient()
@@ -419,20 +429,28 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     if not clusters:
         return {"digest": "Not enough messages to generate digest.", "period": period}
 
-    # Map phase: summarize each cluster
+    # Map phase: summarize each cluster (same format as runner.py)
     import asyncio
     summaries = []
     for cluster in clusters[:10]:  # max 10 clusters
-        texts = "\n\n".join(m["content"][:300] for m in cluster.messages[:20] if m.get("content"))
+        cluster_label = f"{getattr(cluster, 'emoji', '📌')} {getattr(cluster, 'label', 'Разное')}"
+        posts_text = "\n\n---\n\n".join(
+            f"[Пост] channel=@{domain_username_map.get(str(m.get('domain_id', '')), '?')} "
+            f"msg_id={m.get('telegram_msg_id', 0)}\n"
+            f"{(m.get('content') or '')[:1500]}"
+            for m in cluster.messages[:20]
+        )
         try:
             summary = await llm_call(
                 model="tier1/extraction",
                 messages=[
-                    {"role": "system", "content": MAP_DIGEST_SYSTEM},
-                    {"role": "user", "content": texts},
+                    {"role": "system", "content": MAP_DIGEST_SYSTEM.format(
+                        cluster_label=cluster_label, posts=posts_text,
+                    )},
+                    {"role": "user", "content": posts_text},
                 ],
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=1000,
             )
             summaries.append(summary)
         except Exception:
@@ -443,11 +461,12 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
 
     # Reduce phase: combine summaries
     combined = "\n\n---\n\n".join(summaries)
+    reduce_prompt = REDUCE_DIGEST_SYSTEM.format(total_posts=len(messages))
     try:
         digest_text = await llm_call(
             model="tier3/answer",
             messages=[
-                {"role": "system", "content": REDUCE_DIGEST_SYSTEM},
+                {"role": "system", "content": reduce_prompt},
                 {"role": "user", "content": combined},
             ],
             temperature=0.3,
@@ -455,6 +474,24 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
         )
     except Exception:
         digest_text = "\n\n".join(summaries)
+
+    # Post-process: replace [msg_id: N] with t.me links
+    msg_url_map: dict[int, str] = {}
+    for m in messages:
+        msg_id = m.get("telegram_msg_id", 0)
+        domain_id = str(m.get("domain_id", ""))
+        username = domain_username_map.get(domain_id, "")
+        if username and msg_id:
+            msg_url_map[msg_id] = f"https://t.me/{username}/{msg_id}"
+
+    def _replace_ref(match):
+        mid = int(match.group(1))
+        url = msg_url_map.get(mid)
+        if url:
+            return f" [→]({url})"
+        return ""
+
+    digest_text = re.sub(r'\[msg_id:\s*(\d+)\]', _replace_ref, digest_text)
 
     return {
         "digest": digest_text,
