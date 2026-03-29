@@ -12,6 +12,8 @@ mcp = FastMCP(
         "Agent Memory MCP provides Telegram conversation memory for AI agents. "
         "Use search_memory to find information, get_digest for summaries, "
         "get_decisions for extracted decisions, and add_source to connect channels. "
+        "IMPORTANT: Call list_scopes FIRST to discover valid scope values "
+        "(\"all\", \"folder:Name\", \"@username\") before using get_digest or search_memory. "
         "Requires AGENT_MEMORY_API_KEY and AGENT_MEMORY_URL environment variables."
     ),
 )
@@ -32,7 +34,7 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10) -
 
     Args:
         query: What to search for in the memory.
-        scope: Optional scope — @channel_username or domain_id.
+        scope: Optional scope — "all", "@username", "folder:Name", or domain_id. Call list_scopes to see available options.
         limit: Maximum number of sources to return (default 10).
     """
     return await _get_client().search(query, scope, limit)
@@ -43,7 +45,7 @@ async def get_digest(scope: str, period: str = "7d") -> str:
     """Get a digest of Telegram conversations for a period.
 
     Args:
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Call list_scopes to see available options.
         period: Time period: 1d, 3d, 7d, or 30d.
     """
     return await _get_client().digest(scope, period)
@@ -54,7 +56,7 @@ async def get_decisions(scope: str, topic: str | None = None) -> str:
     """Extract decisions, action items, and open questions from conversations.
 
     Args:
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Call list_scopes to see available options.
         topic: Optional topic to filter by.
     """
     return await _get_client().decisions(scope, topic)
@@ -79,12 +81,24 @@ async def list_sources() -> str:
 
 
 @mcp.tool()
+async def list_scopes() -> str:
+    """List all available scopes for get_digest, search_memory, and other tools.
+
+    Call this FIRST to discover valid scope values before calling get_digest or search_memory.
+
+    Returns:
+        Available scopes: "all" for everything, "folder:Name" for channel groups, "@username" for individual channels.
+    """
+    return await _get_client().list_scopes()
+
+
+@mcp.tool()
 async def get_agent_context(task: str, scope: str) -> str:
     """Get a full context package for an agent task.
 
     Args:
         task: Description of what the agent needs to accomplish.
-        scope: Source scope — @channel_username or domain_id.
+        scope: Source scope — "all", "@username", "folder:Name", or domain_id. Call list_scopes to see available options.
     """
     return await _get_client().context(task, scope)
 
