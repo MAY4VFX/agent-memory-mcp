@@ -58,6 +58,9 @@ class AgentMemoryClient:
     async def list_sources(self) -> str:
         return await self._request("sources", method="GET")
 
+    async def list_scopes(self) -> str:
+        return await self._request("scopes", method="GET")
+
     async def context(self, task: str, scope: str) -> str:
         return await self._request("memory/context", task=task, scope=scope)
 

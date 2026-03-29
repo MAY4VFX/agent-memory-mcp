@@ -7,8 +7,10 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, Depends
 
+from fastapi import HTTPException
 from agent_memory_mcp.memory_api import schemas as S
 from agent_memory_mcp.memory_api import service
+from agent_memory_mcp.memory_api.service import ScopeNotFound
 from agent_memory_mcp.memory_api.auth import CREDIT_COSTS, require_credits, verify_api_key
 
 log = structlog.get_logger(__name__)
@@ -27,6 +29,37 @@ async def health():
 async def list_sources(api_key: dict = Depends(verify_api_key)):
     sources = await service.list_sources(api_key["telegram_id"])
     return {"sources": sources, "count": len(sources)}
+
+
+@router.get("/scopes")
+async def list_scopes(api_key: dict = Depends(verify_api_key)):
+    """List all available scopes for digest, search, and other tools."""
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db import queries_groups as gq
+    from agent_memory_mcp.db.engine import async_engine
+
+    owner_id = api_key["telegram_id"]
+    domains = await db_q.list_domains(async_engine, owner_id)
+    groups = await gq.list_groups(async_engine, owner_id)
+
+    scopes = [{"scope": "all", "label": f"All channels ({len(domains)})", "type": "all"}]
+    for g in groups:
+        members = await gq.get_group_domains(async_engine, g["id"])
+        scopes.append({
+            "scope": f"folder:{g['name']}",
+            "label": f"{g.get('emoji', '')} {g['name']} ({len(members)} channels)",
+            "type": "folder",
+            "channels": [f"@{m.get('channel_username', '?')}" for m in members],
+        })
+    for d in domains:
+        if d.get("channel_username"):
+            scopes.append({
+                "scope": f"@{d['channel_username']}",
+                "label": d.get("display_name") or d.get("channel_name") or d["channel_username"],
+                "type": "channel",
+                "message_count": d.get("message_count", 0),
+            })
+    return {"scopes": scopes, "count": len(scopes)}
 
 
 @router.get("/account/balance")
@@ -70,7 +103,6 @@ async def remove_source(source_id: UUID, api_key: dict = Depends(verify_api_key)
     from agent_memory_mcp.db.engine import async_engine
     domain = await db_q.get_domain(async_engine, source_id)
     if not domain or domain["owner_id"] != api_key["telegram_id"]:
-        from fastapi import HTTPException
         raise HTTPException(404, "Source not found")
     await db_q.delete_domain(async_engine, source_id)
     return {"status": "deleted", "source_id": str(source_id)}
@@ -83,12 +115,15 @@ async def search_memory(
     req: S.SearchMemoryRequest,
     api_key: dict = Depends(require_credits("memory/search")),
 ):
-    result = await service.search_memory(
-        query=req.query,
-        owner_id=api_key["telegram_id"],
-        scope=req.scope,
-        limit=req.limit,
-    )
+    try:
+        result = await service.search_memory(
+            query=req.query,
+            owner_id=api_key["telegram_id"],
+            scope=req.scope,
+            limit=req.limit,
+        )
+    except ScopeNotFound as e:
+        raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
     return {**result, "points_used": CREDIT_COSTS["memory/search"], "balance": api_key["credits_balance"]}
 
 
