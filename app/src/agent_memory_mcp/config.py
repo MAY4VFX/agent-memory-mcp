@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     # --- Reranker (TEI) ---
     reranker_url: str = "http://compose-parse-haptic-microchip-b4gwl9-reranker-1:8001"
 
+    # --- GPU lifecycle (on-demand wake/sleep) ---
+    gpu_manager_enabled: bool = True
+    gpu_idle_timeout: int = 300  # seconds before stopping idle GPU container
+    gpu_startup_timeout: int = 120  # max seconds to wait for container healthy
+    gpu_docker_host: str = "tcp://192.168.2.140:2375"  # Docker API via TCP
+    gpu_coord_redis_url: str = "redis://gpu-coord-redis:6379/0"  # cross-project coordination
+    gpu_embedding_container: str = "tgkb-embedding-exnntq-embedding-1"
+    gpu_reranker_container: str = "compose-parse-haptic-microchip-b4gwl9-reranker-1"
+    gpu_project_id: str = "amm"
+
     # --- Hybrid Search ---
     hybrid_search_enabled: bool = True
 

@@ -20,6 +20,13 @@ class RerankerClient:
             base_url=self._base_url, timeout=60.0, trust_env=False,
         )
 
+    async def _ensure_gpu(self) -> None:
+        from agent_memory_mcp.gpu.manager import get_gpu_manager
+        from agent_memory_mcp.config import settings
+        mgr = get_gpu_manager()
+        if mgr:
+            await mgr.ensure_running("reranker", idle_timeout=settings.gpu_idle_timeout)
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, max=10), reraise=True)
     async def rerank(
         self,
@@ -33,6 +40,7 @@ class RerankerClient:
         """
         if not documents:
             return []
+        await self._ensure_gpu()
         payload: dict = {"query": query, "texts": documents, "raw_scores": False}
         if top_k is not None:
             payload["truncate"] = True
