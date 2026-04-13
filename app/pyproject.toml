@@ -58,6 +58,9 @@ dependencies = [
     # SOCKS5 proxy for Telegram
     "python-socks[asyncio]>=2.4",
     "aiohttp-socks>=0.9",
+    # GPU container lifecycle (on-demand wake/sleep)
+    "docker>=7.1",
+    "redis>=5.2",
 ]
 
 [tool.setuptools.packages.find]
