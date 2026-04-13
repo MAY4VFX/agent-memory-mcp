@@ -63,6 +63,35 @@ async def main() -> None:
     await _wait_for_db()
     await _wait_for_milvus()
 
+    # Initialize GPU manager (on-demand TEI containers)
+    if settings.gpu_manager_enabled:
+        try:
+            from agent_memory_mcp.gpu.manager import (
+                GpuService, GpuServiceManager, set_gpu_manager,
+            )
+            gpu_mgr = GpuServiceManager(
+                docker_host=settings.gpu_docker_host,
+                redis_url=settings.gpu_coord_redis_url,
+                project_id=settings.gpu_project_id,
+            )
+            gpu_mgr.register(GpuService(
+                name="embedding",
+                container_name=settings.gpu_embedding_container,
+                health_url=f"{settings.embedding_url}/health",
+                health_timeout=settings.gpu_startup_timeout,
+            ))
+            gpu_mgr.register(GpuService(
+                name="reranker",
+                container_name=settings.gpu_reranker_container,
+                health_url=f"{settings.reranker_url}/health",
+                health_timeout=settings.gpu_startup_timeout,
+            ))
+            set_gpu_manager(gpu_mgr)
+            gpu_mgr.start_idle_checker_thread(idle_timeout=settings.gpu_idle_timeout)
+            log.info("gpu_manager_started", idle_timeout=settings.gpu_idle_timeout)
+        except Exception:
+            log.exception("gpu_manager_init_failed")
+
     # Connect Telethon (optional — needed for channel ingestion)
     collector = None
     if settings.telegram_session:

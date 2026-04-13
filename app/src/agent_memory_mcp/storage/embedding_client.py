@@ -20,9 +20,17 @@ class EmbeddingClient:
             base_url=self._base_url, timeout=60.0, trust_env=False,
         )
 
+    async def _ensure_gpu(self) -> None:
+        from agent_memory_mcp.gpu.manager import get_gpu_manager
+        from agent_memory_mcp.config import settings
+        mgr = get_gpu_manager()
+        if mgr:
+            await mgr.ensure_running("embedding", idle_timeout=settings.gpu_idle_timeout)
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, max=10), reraise=True)
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         """Get dense embeddings (1024-dim) for a list of texts."""
+        await self._ensure_gpu()
         resp = await self._client.post(
             "/embed", json={"inputs": texts, "normalize": True, "truncate": True},
         )
