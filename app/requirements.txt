@@ -28,3 +28,5 @@ tonutils>=0.2
 cryptography>=44.0
 python-socks[asyncio]>=2.4
 aiohttp-socks>=0.9
+docker>=7.1
+redis>=5.2
