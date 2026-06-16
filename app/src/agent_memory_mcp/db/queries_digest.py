@@ -22,6 +22,7 @@ async def create_digest_config(
     scope_type: str = "all",
     scope_id: UUID | None = None,
     send_hour_utc: int = 8,
+    frequency_hours: int = 24,
 ) -> dict:
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -33,6 +34,7 @@ async def create_digest_config(
             scope_type=scope_type,
             scope_id=scope_id,
             send_hour_utc=send_hour_utc,
+            frequency_hours=frequency_hours,
         )
         .on_conflict_do_update(
             constraint="digest_configs_user_id_name_key",
@@ -40,6 +42,7 @@ async def create_digest_config(
                 "scope_type": scope_type,
                 "scope_id": scope_id,
                 "send_hour_utc": send_hour_utc,
+                "frequency_hours": frequency_hours,
                 "is_active": True,
             },
         )
@@ -98,24 +101,54 @@ async def update_digest_config(
 
 
 async def get_due_digests(engine: AsyncEngine, hour_utc: int) -> list[dict]:
-    """Get all active digest configs due at the given hour.
+    """Get all active digest configs due at the given UTC hour.
 
-    A config is "due" when:
-    - is_active = true
-    - send_hour_utc matches
-    - last_sent_at is NULL or more than 20 hours ago
+    The scheduler calls this once per hour, so granularity is one hour.
+
+    A config is "due" when ``is_active`` and enough time has elapsed since
+    ``last_sent_at`` (governed by ``frequency_hours``):
+
+    - Sub-daily cadence (``frequency_hours < 24``, e.g. every 6h/12h): fires on
+      any hourly tick once the interval has elapsed; ``send_hour_utc`` is ignored.
+    - Daily and multi-day cadence (``frequency_hours >= 24``, e.g. daily/weekly):
+      fires only at the ``send_hour_utc`` anchor hour once the interval elapsed.
+
+    A small grace (30/90 min) absorbs the hourly check granularity and clock
+    drift so a digest isn't skipped for being a few minutes short of the window.
     """
-    from sqlalchemy import text as sa_text
+    from sqlalchemy import bindparam, text as sa_text
 
     stmt = (
-        select(digest_configs)
-        .where(
-            digest_configs.c.is_active.is_(True),
-            digest_configs.c.send_hour_utc == hour_utc,
-            sa_text(
-                "(last_sent_at IS NULL OR last_sent_at < now() - interval '20 hours')"
-            ),
+        sa_text(
+            """
+            SELECT * FROM digest_configs
+            WHERE is_active = true
+              AND (
+                (
+                  frequency_hours < 24
+                  AND (
+                    last_sent_at IS NULL
+                    OR last_sent_at < now()
+                       - make_interval(hours => frequency_hours)
+                       + interval '30 minutes'
+                  )
+                )
+                OR
+                (
+                  frequency_hours >= 24
+                  AND send_hour_utc = :hour
+                  AND (
+                    last_sent_at IS NULL
+                    OR last_sent_at < now()
+                       - make_interval(hours => frequency_hours)
+                       + interval '90 minutes'
+                  )
+                )
+              )
+            """
         )
+        .bindparams(bindparam("hour", hour_utc))
+        .columns(*digest_configs.c)
     )
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()

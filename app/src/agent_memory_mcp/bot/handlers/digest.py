@@ -8,7 +8,12 @@ from aiogram.types import CallbackQuery, Message
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
-from agent_memory_mcp.bot.keyboards import digest_hour_kb, digest_scope_kb, digest_settings_kb
+from agent_memory_mcp.bot.keyboards import (
+    digest_frequency_kb,
+    digest_hour_kb,
+    digest_scope_kb,
+    digest_settings_kb,
+)
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db import queries_digest as dq
@@ -106,6 +111,52 @@ async def set_hour(callback: CallbackQuery) -> None:
     await callback.answer(f"\u2705 Час: {hour}:00 UTC")
     await callback.message.edit_text(
         f"Дайджест будет отправляться в {hour}:00 UTC.",
+        reply_markup=digest_settings_kb(config),
+    )
+
+
+# ------------------------------------------------------------------ Frequency selection
+
+_FREQ_LABELS = {
+    6: "каждые 6 часов",
+    12: "каждые 12 часов",
+    24: "ежедневно",
+    48: "раз в 2 дня",
+    168: "еженедельно",
+}
+
+
+@router.callback_query(F.data == "digest:freq")
+async def choose_frequency(callback: CallbackQuery) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    config = await dq.get_user_digest_config(async_engine, callback.from_user.id)
+    current = (config.get("frequency_hours") if config else None) or 24
+    await callback.message.edit_text(
+        "Как часто присылать дайджест?", reply_markup=digest_frequency_kb(current),
+    )
+
+
+@router.callback_query(F.data.startswith("digest:set_freq:"))
+async def set_frequency(callback: CallbackQuery) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    hours = int(callback.data.split(":")[2])
+    config = await dq.get_user_digest_config(async_engine, callback.from_user.id)
+    if config:
+        config = await dq.update_digest_config(
+            async_engine, config["id"], frequency_hours=hours,
+        )
+        config = await _enrich_scope_name(config)
+    label = _FREQ_LABELS.get(hours, f"каждые {hours} ч")
+    await callback.answer(f"✅ {label.capitalize()}")
+    hint = ""
+    if hours >= 24:
+        hour = config["send_hour_utc"] if config else 8
+        hint = f" в {hour}:00 UTC"
+    await callback.message.edit_text(
+        f"Дайджест будет приходить {label}{hint}.",
         reply_markup=digest_settings_kb(config),
     )
 
