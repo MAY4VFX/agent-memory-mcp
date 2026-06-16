@@ -387,21 +387,63 @@ def _digest_scope_label(config: dict) -> str:
     return base
 
 
+# Digest cadence options (hours) \u2192 button label
+_DIGEST_FREQ_OPTIONS = [
+    (6, "\u041a\u0430\u0436\u0434\u044b\u0435 6 \u0447"),
+    (12, "\u041a\u0430\u0436\u0434\u044b\u0435 12 \u0447"),
+    (24, "\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e"),
+    (48, "\u0420\u0430\u0437 \u0432 2 \u0434\u043d\u044f"),
+    (168, "\u0415\u0436\u0435\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u043e"),
+]
+_DIGEST_FREQ_LABELS = dict(_DIGEST_FREQ_OPTIONS)
+
+
+def _digest_freq_label(hours: int) -> str:
+    """Short label for current digest cadence."""
+    if hours in _DIGEST_FREQ_LABELS:
+        return _DIGEST_FREQ_LABELS[hours]
+    if hours < 24:
+        return f"\u041a\u0430\u0436\u0434\u044b\u0435 {hours} \u0447"
+    days = hours // 24
+    return f"\u0420\u0430\u0437 \u0432 {days} \u0434\u043d."
+
+
 def digest_settings_kb(config: dict | None = None) -> InlineKeyboardMarkup:
     """Digest settings keyboard."""
     if config and config.get("is_active"):
         scope_label = _digest_scope_label(config)
-        return InlineKeyboardMarkup(inline_keyboard=[
+        freq_label = _digest_freq_label(config.get("frequency_hours") or 24)
+        rows = [
             [InlineKeyboardButton(text=f"\U0001f4cb {scope_label}", callback_data="digest:scope")],
-            [InlineKeyboardButton(text=f"\u23f0 \u0427\u0430\u0441: {config['send_hour_utc']}:00 UTC", callback_data="digest:hour")],
+            [InlineKeyboardButton(text=f"\U0001f504 \u0427\u0430\u0441\u0442\u043e\u0442\u0430: {freq_label}", callback_data="digest:freq")],
+        ]
+        # The send hour only applies to daily/multi-day cadence
+        if (config.get("frequency_hours") or 24) >= 24:
+            rows.append(
+                [InlineKeyboardButton(text=f"\u23f0 \u0427\u0430\u0441: {config['send_hour_utc']}:00 UTC", callback_data="digest:hour")]
+            )
+        rows.extend([
             [InlineKeyboardButton(text="\U0001f50d \u041f\u0440\u0435\u0432\u044c\u044e", callback_data="digest:preview")],
             [InlineKeyboardButton(text="\u23f8 \u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c", callback_data="digest:disable")],
             [InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="digest:back")],
         ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="\u25b6\ufe0f \u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0434\u0430\u0439\u0434\u0436\u0435\u0441\u0442", callback_data="digest:enable")],
         [InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="digest:back")],
     ])
+
+
+def digest_frequency_kb(current_hours: int = 24) -> InlineKeyboardMarkup:
+    """Select how often the digest is sent."""
+    buttons = []
+    for hours, label in _DIGEST_FREQ_OPTIONS:
+        check = "\u2705 " if hours == current_hours else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{label}", callback_data=f"digest:set_freq:{hours}",
+        )])
+    buttons.append([InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="digest:scope_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def digest_scope_kb(

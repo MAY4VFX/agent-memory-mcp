@@ -32,6 +32,18 @@ _DIGEST_HASHTAGS = {"дайджест", "digest", "дайджестчата", "�
 _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
+def _format_period(hours: int) -> str:
+    """Human-readable Russian label for a digest window in hours."""
+    if hours < 24:
+        return f"последние {hours} ч"
+    days = hours // 24
+    if days == 1:
+        return "последние 24 часа"
+    if days == 7:
+        return "последнюю неделю"
+    return f"последние {days} дн."
+
+
 async def run_digest(
     config: dict,
     engine: AsyncEngine,
@@ -75,15 +87,17 @@ async def run_digest(
                 )
                 return
 
-            # Fetch messages from last 24h
-            since = datetime.now(timezone.utc) - timedelta(hours=24)
+            # Fetch messages from the window matching the digest cadence
+            freq_hours = config.get("frequency_hours") or 24
+            period_label = _format_period(freq_hours)
+            since = datetime.now(timezone.utc) - timedelta(hours=freq_hours)
             all_messages = await db_q.get_messages_since(engine, domain_ids, since, limit=5000)
 
             if not all_messages:
                 await dq.update_digest_run(
                     engine, run_id,
                     status="completed",
-                    digest_text="За последние 24 часа новых постов не было.",
+                    digest_text=f"За {period_label} новых постов не было.",
                     domain_count=len(domain_ids), message_count=0,
                     completed_at=datetime.now(timezone.utc),
                 )
