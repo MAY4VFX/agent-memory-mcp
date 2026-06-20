@@ -142,6 +142,7 @@ async def add_source(
     Use list_folders() first to see available folders.
     """
     from agent_memory_mcp.collector.pool import collector_pool
+    from agent_memory_mcp.config import settings
 
     if not collector_pool:
         return {"status": "error", "message": "Collector pool not initialized"}
@@ -150,8 +151,8 @@ async def add_source(
     if not uc:
         return {
             "status": "auth_required",
-            "message": "Telegram не подключён. Авторизуйся через @AgentMemoryBot.",
-            "bot_url": "https://t.me/AgentMemoryBot",
+            "message": f"Telegram не подключён. Авторизуйся через @{settings.bot_username}.",
+            "bot_url": settings.bot_url,
         }
 
     # --- Folder import: add all channels from a Telegram folder ---

@@ -663,19 +663,19 @@ async def btn_help(message: Message):
 
 # --- Text in General → create new topic thread ---
 
-@router.message(F.text, ~F.text.startswith("/"))
+@router.message(F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
 async def general_text_to_topic(message: Message, state: FSMContext):
     """User typed free text → create a new thread for agent chat.
 
-    Skips if:
-    - Text matches a reply keyboard button (handled by specific handlers above)
-    - FSM state is active (key naming, auth flow, etc.)
+    Button texts are excluded from the filter (~F.text.in_(_BUTTON_TEXTS)) so
+    the update propagates to dedicated handlers in later routers (auth_router's
+    "📱 Connect Telegram", wallet_router's "💎 Top Up"). Matching them here
+    would consume the update and dead-end the button.
+
+    Skips if FSM state is active (key naming, auth flow, etc.).
     """
     text = message.text.strip()
     if not text:
-        return
-    # Skip button texts — they're handled by dedicated handlers
-    if text in _BUTTON_TEXTS:
         return
     # Don't create topic if user is in the middle of an FSM flow
     current_state = await state.get_state()
