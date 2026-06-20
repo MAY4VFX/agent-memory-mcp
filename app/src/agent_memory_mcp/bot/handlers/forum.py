@@ -11,7 +11,7 @@ No group/supergroup needed — topics work in private chat.
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -663,23 +663,20 @@ async def btn_help(message: Message):
 
 # --- Text in General → create new topic thread ---
 
-@router.message(F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
+@router.message(StateFilter(None), F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
 async def general_text_to_topic(message: Message, state: FSMContext):
     """User typed free text → create a new thread for agent chat.
 
-    Button texts are excluded from the filter (~F.text.in_(_BUTTON_TEXTS)) so
-    the update propagates to dedicated handlers in later routers (auth_router's
-    "📱 Connect Telegram", wallet_router's "💎 Top Up"). Matching them here
-    would consume the update and dead-end the button.
-
-    Skips if FSM state is active (key naming, auth flow, etc.).
+    The filter excludes anything that belongs to a dedicated handler in a
+    later router, because matching-then-returning here would consume the
+    update and dead-end that handler:
+    - StateFilter(None): skip while any FSM flow is active (auth code/2FA,
+      etc.) so the update reaches auth_router's state handlers.
+    - ~F.text.in_(_BUTTON_TEXTS): let reply-keyboard buttons reach their
+      handlers (auth "📱 Connect Telegram", wallet "💎 Top Up").
     """
     text = message.text.strip()
     if not text:
-        return
-    # Don't create topic if user is in the middle of an FSM flow
-    current_state = await state.get_state()
-    if current_state is not None:
         return
 
     # Create forum topic with the message text as title
