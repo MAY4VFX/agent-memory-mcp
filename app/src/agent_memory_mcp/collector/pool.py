@@ -204,8 +204,8 @@ class CollectorPool:
         if not session_row:
             return {
                 "connected": False,
-                "message": "Telegram не подключён. Авторизуйся через @AgentMemoryBot.",
-                "bot_url": "https://t.me/AgentMemoryBot",
+                "message": f"Telegram не подключён. Авторизуйся через @{settings.bot_username}.",
+                "bot_url": settings.bot_url,
             }
         return {
             "connected": True,

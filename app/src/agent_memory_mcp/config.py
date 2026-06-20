@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     admin_telegram_id: int
     allowed_usernames: str = ""  # comma-separated: "user1,user2,user3"
+    bot_username: str = "agent_memory_mcp_bot"  # this deployment's bot (no @)
 
     # --- Telegram Collector (Telethon) ---
     telegram_api_id: int
@@ -118,6 +119,11 @@ class Settings(BaseSettings):
 
     # --- Forum bot ---
     forum_chat_id: int = 0
+
+    @property
+    def bot_url(self) -> str:
+        """Public deep-link to this deployment's bot."""
+        return f"https://t.me/{self.bot_username}"
 
 
 settings = Settings()

@@ -65,7 +65,7 @@ def create_api_app() -> FastAPI:
                     headers={"WWW-Authenticate": "Bearer"},
                     content={
                         "error": "unauthorized",
-                        "error_description": "Bearer token required. Get your API key at https://t.me/AgentMemoryBot",
+                        "error_description": f"Bearer token required. Get your API key at {settings.bot_url}",
                     },
                 )
             return await call_next(request)
@@ -78,7 +78,7 @@ def create_api_app() -> FastAPI:
                 headers={"WWW-Authenticate": "Bearer"},
                 content={
                     "error": "unauthorized",
-                    "error_description": "Bearer token required. Get your API key at https://t.me/AgentMemoryBot",
+                    "error_description": f"Bearer token required. Get your API key at {settings.bot_url}",
                 },
             )
 

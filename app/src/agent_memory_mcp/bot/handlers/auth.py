@@ -15,6 +15,7 @@ import asyncio
 
 import structlog
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -77,6 +78,16 @@ async def _start_auth_flow(message: Message, state: FSMContext) -> None:
         reply_markup=kb,
     )
     await state.set_state(AuthStates.waiting_contact)
+
+
+@router.message(Command("connect"))
+async def cmd_connect_telegram(message: Message, state: FSMContext):
+    """/connect command — start (or restart) Telegram auth flow.
+
+    Works even when the persistent reply keyboard is stale (e.g. the session
+    was revoked server-side but the chat still shows the old "Sources" button).
+    """
+    await _start_auth_flow(message, state)
 
 
 @router.message(F.text == "📱 Connect Telegram")

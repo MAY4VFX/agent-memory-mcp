@@ -4,7 +4,7 @@ Flow (as seen by Claude Code / Cursor):
 1. MCP client connects → server requires auth
 2. Client fetches /.well-known/oauth-authorization-server
 3. Client opens browser → /oauth/authorize
-4. User enters API key from @AgentMemoryBot
+4. User enters API key from the bot
 5. Redirect back with auth code
 6. Client exchanges code for token via /oauth/token
 7. Client sends Bearer token on all MCP requests
@@ -18,6 +18,8 @@ import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from agent_memory_mcp.config import settings
 
 router = APIRouter()
 
@@ -179,7 +181,7 @@ async def oauth_authorize_page(
 
         <p class="hint">
             Don't have a key? Get one from
-            <a href="https://t.me/AgentMemoryBot" target="_blank">@AgentMemoryBot</a>
+            <a href="{settings.bot_url}" target="_blank">@{settings.bot_username}</a>
         </p>
     </div>
 </body>

@@ -253,7 +253,7 @@ def require_credits(endpoint: str):
                     "error": "insufficient_points",
                     "balance": balance,
                     "required": cost,
-                    "topup_url": "https://t.me/AgentMemoryBot?start=topup",
+                    "topup_url": f"{settings.bot_url}?start=topup",
                 },
             )
         new_balance = await charge_credits(async_engine, api_key["id"], cost, endpoint)
