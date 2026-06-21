@@ -17,17 +17,30 @@ from agent_memory_mcp.models.messages import TelegramMessage
 
 log = structlog.get_logger()
 
-_LINK_RE = re.compile(
-    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:\+)?([a-zA-Z0-9_]+)",
+# Private invite links: t.me/+<hash> or t.me/joinchat/<hash>. The hash is
+# base64url (may contain - and _), NOT a username — it must be resolved via
+# the invite flow, not get_entity().
+_INVITE_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:joinchat/|\+)([a-zA-Z0-9_-]+)",
+)
+# Public username links: t.me/<username> (no leading +).
+_USERNAME_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/([a-zA-Z0-9_]+)",
 )
 
 
+def _parse_invite_hash(link: str) -> str | None:
+    """Return the invite hash for a private invite link, else None."""
+    m = _INVITE_RE.search(link.strip())
+    return m.group(1) if m else None
+
+
 def _parse_channel_username(link: str) -> str:
-    """Extract username from various Telegram link formats."""
+    """Extract username from public Telegram link / @handle formats."""
     link = link.strip()
     if link.startswith("@"):
         return link[1:]
-    m = _LINK_RE.search(link)
+    m = _USERNAME_RE.search(link)
     if m:
         return m.group(1)
     # Assume bare username
@@ -89,8 +102,16 @@ class TelegramCollector:
     async def resolve_channel(self, link: str) -> dict:
         """Resolve a channel link/username to basic info.
 
-        Returns dict with keys: channel_id, title, username.
+        Handles public links/@usernames via get_entity, and private invite
+        links (t.me/+hash, t.me/joinchat/hash) via the invite flow (joining
+        the chat if not already a member).
+
+        Returns dict with keys: channel_id, title, username (empty for private).
         """
+        invite_hash = _parse_invite_hash(link)
+        if invite_hash:
+            return await self._resolve_invite(invite_hash)
+
         username = _parse_channel_username(link)
         entity = await self._client.get_entity(username)
         if not isinstance(entity, Channel):
@@ -99,6 +120,45 @@ class TelegramCollector:
             "channel_id": entity.id,
             "title": entity.title,
             "username": entity.username or username,
+        }
+
+    async def _resolve_invite(self, invite_hash: str) -> dict:
+        """Resolve a private invite hash, joining the chat if needed."""
+        from telethon.errors import (
+            InviteHashExpiredError,
+            InviteHashInvalidError,
+            UserAlreadyParticipantError,
+        )
+        from telethon.tl.functions.messages import (
+            CheckChatInviteRequest,
+            ImportChatInviteRequest,
+        )
+        from telethon.tl.types import ChatInviteAlready
+
+        try:
+            invite = await self._client(CheckChatInviteRequest(invite_hash))
+        except (InviteHashExpiredError, InviteHashInvalidError) as e:
+            raise ValueError(f"Invalid or expired invite link: {e}") from e
+
+        if isinstance(invite, ChatInviteAlready):
+            # Already a member — invite.chat is the resolved entity.
+            chat = invite.chat
+        else:
+            # ChatInvite / ChatInvitePeek — join to get persistent access.
+            try:
+                updates = await self._client(ImportChatInviteRequest(invite_hash))
+                chat = updates.chats[0] if updates.chats else None
+            except UserAlreadyParticipantError:
+                chat = getattr(invite, "chat", None)
+            except (InviteHashExpiredError, InviteHashInvalidError) as e:
+                raise ValueError(f"Invalid or expired invite link: {e}") from e
+
+        if not isinstance(chat, Channel):
+            raise ValueError("Invite link does not resolve to a channel/supergroup")
+        return {
+            "channel_id": chat.id,
+            "title": chat.title,
+            "username": chat.username or "",
         }
 
     async def fetch_messages(
@@ -139,7 +199,15 @@ class TelegramCollector:
                 )
                 entity = await self._client.get_entity(channel_username)
             else:
-                raise
+                # Private channel (no username): refresh the dialog cache so the
+                # access_hash for joined channels is re-populated after a restart,
+                # then retry the PeerChannel lookup.
+                log.warning(
+                    "peer_channel_cache_miss_refresh_dialogs",
+                    channel_id=channel_id,
+                )
+                await self._client.get_dialogs()
+                entity = await self._client.get_entity(PeerChannel(channel_id))
 
         if use_takeout:
             return await self._fetch_with_takeout(
