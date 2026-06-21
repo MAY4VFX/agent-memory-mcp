@@ -130,16 +130,31 @@ async def list_sources(owner_id: int) -> list[dict]:
     ]
 
 
+def _clamp_sync_frequency(sync_frequency_minutes: int | None) -> int:
+    """Normalize the per-source sync cadence (default 60, floor 5 minutes).
+
+    The scheduler ticks every ~30s, so 5 min is the practical floor; very
+    frequent syncing also risks Telegram flood-waits.
+    """
+    if not sync_frequency_minutes:
+        return 60
+    return max(5, int(sync_frequency_minutes))
+
+
 async def add_source(
     owner_id: int,
     handle: str,
     source_type: str = "channel",
     sync_range: str = "3m",
+    sync_frequency_minutes: int | None = None,
 ) -> dict:
     """Add a Telegram source for a user via their Telethon session.
 
     source_type="folder" adds ALL channels from a Telegram folder at once.
     Use list_folders() first to see available folders.
+
+    sync_frequency_minutes controls how often the source re-syncs (default 60,
+    minimum 5).
     """
     from agent_memory_mcp.collector.pool import collector_pool
     from agent_memory_mcp.config import settings
@@ -155,15 +170,19 @@ async def add_source(
             "bot_url": settings.bot_url,
         }
 
+    freq = _clamp_sync_frequency(sync_frequency_minutes)
+
     # --- Folder import: add all channels from a Telegram folder ---
     if source_type == "folder":
-        return await _add_folder(owner_id, uc, handle, sync_range)
+        return await _add_folder(owner_id, uc, handle, sync_range, freq)
 
     # --- Single channel ---
-    return await _add_single_channel(owner_id, uc, handle, sync_range)
+    return await _add_single_channel(owner_id, uc, handle, sync_range, freq)
 
 
-async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -> dict:
+async def _add_single_channel(
+    owner_id: int, uc, handle: str, sync_range: str, sync_frequency_minutes: int = 60,
+) -> dict:
     """Add a single channel as a source."""
     try:
         info = await uc.resolve_channel(handle)
@@ -194,7 +213,7 @@ async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -
         channel_username=info["username"],
         channel_name=info["title"],
         sync_depth=sync_range,
-        sync_frequency_minutes=60,
+        sync_frequency_minutes=sync_frequency_minutes,
         emoji="📡",
         display_name=info["title"],
         pinned=True,
@@ -214,7 +233,9 @@ async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -
     }
 
 
-async def _add_folder(owner_id: int, uc, folder_name: str, sync_range: str) -> dict:
+async def _add_folder(
+    owner_id: int, uc, folder_name: str, sync_range: str, sync_frequency_minutes: int = 60,
+) -> dict:
     """Add all channels from a Telegram folder."""
     from datetime import datetime, timezone
     from agent_memory_mcp.db import queries_groups as gq
@@ -276,7 +297,7 @@ async def _add_folder(owner_id: int, uc, folder_name: str, sync_range: str) -> d
             channel_username=peer.get("username", ""),
             channel_name=peer["title"],
             sync_depth=sync_range,
-            sync_frequency_minutes=60,
+            sync_frequency_minutes=sync_frequency_minutes,
             emoji="📁",
             display_name=peer["title"],
             pinned=False,
@@ -388,6 +409,100 @@ async def sync_status(owner_id: int) -> dict:
     return {"sources": sources, "count": len(sources)}
 
 
+def _split_emoji(header: str) -> tuple[str, str]:
+    """Split a topic header like "🔧 Инструменты" into (emoji, label)."""
+    header = header.strip()
+    if header and ord(header[0]) >= 0x2190:  # emoji / symbol range
+        return header[0], header[1:].strip()
+    return "", header
+
+
+def _structure_digest(digest_text: str, msgid_to_meta: dict) -> tuple[list, list, str]:
+    """Parse REDUCE digest text into structured topics + resolved links, and
+    re-render clean markdown.
+
+    Input format (from REDUCE_DIGEST_SYSTEM):
+        **🔧 Инструменты**
+        • factual bullet [msg_id: 123]
+        ...
+        *Дайджест на основе анализа N постов*
+
+    Returns (topics, links, markdown) where each bullet carries
+    telegram_msg_ids, source_message_ids (internal UUIDs) and links; bullets
+    whose message has no resolvable link get an explicit "url unavailable" note.
+    """
+    import re
+    from agent_memory_mcp.utils.links import make_tme_link
+
+    header_re = re.compile(r"^\*\*(.+?)\*\*\s*$")
+    msgid_re = re.compile(r"\[msg_id:\s*(\d+)\]")
+
+    topics: list[dict] = []
+    links: list[dict] = []
+    md_lines: list[str] = []
+    current: dict | None = None
+
+    for raw in digest_text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            md_lines.append("")
+            continue
+
+        hm = header_re.match(stripped)
+        if hm:
+            emoji, label = _split_emoji(hm.group(1).strip())
+            current = {"emoji": emoji, "label": label, "bullets": []}
+            topics.append(current)
+            md_lines.append(f"**{hm.group(1).strip()}**")
+            continue
+
+        is_bullet = stripped.startswith("•") or (
+            stripped.startswith(("-", "*")) and msgid_re.search(stripped)
+        )
+        if is_bullet:
+            text = msgid_re.sub("", stripped).lstrip("•-* ").strip()
+            msg_ids = [int(x) for x in msgid_re.findall(stripped)]
+            bullet = {
+                "text": text,
+                "telegram_msg_ids": msg_ids,
+                "source_message_ids": [],
+                "links": [],
+            }
+            link_strs: list[str] = []
+            for mid in msg_ids:
+                meta = msgid_to_meta.get(mid)
+                url = ""
+                if meta:
+                    if meta.get("id"):
+                        bullet["source_message_ids"].append(meta["id"])
+                    url = make_tme_link(
+                        meta.get("username"), mid,
+                        meta.get("topic_id"), meta.get("channel_id"),
+                    )
+                if url:
+                    bullet["links"].append({"msg_id": mid, "url": url})
+                    links.append({"msg_id": mid, "url": url})
+                    link_strs.append(f"→ ({url})")
+                else:
+                    bullet["links"].append(
+                        {"msg_id": mid, "url": None, "note": "private chat, url unavailable"}
+                    )
+                    link_strs.append(f"→ (source: private chat, msg_id: {mid}, url unavailable)")
+            if current is None:
+                current = {"emoji": "", "label": "", "bullets": []}
+                topics.append(current)
+            current["bullets"].append(bullet)
+            suffix = (" " + " ".join(link_strs)) if link_strs else ""
+            md_lines.append(f"• {text}{suffix}")
+            continue
+
+        # Footer / freeform line (e.g. "*Дайджест на основе анализа N постов*")
+        md_lines.append(stripped)
+
+    markdown = "\n".join(md_lines).strip()
+    return topics, links, markdown
+
+
 async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     """Generate a digest via map-reduce clustering."""
     import re
@@ -411,12 +526,18 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     if not messages:
         return {"digest": "No messages found for this period.", "period": period, "message_count": 0}
 
-    # Build domain_id → username map for links
+    # Build domain_id → {username, channel_id} maps for links (channel_id is
+    # needed for private channels that have no public username).
     domain_username_map: dict[str, str] = {}
+    domain_channel_map: dict[str, int] = {}
     for did in domain_ids:
         d = await db_q.get_domain(async_engine, did)
-        if d and d.get("channel_username"):
+        if not d:
+            continue
+        if d.get("channel_username"):
             domain_username_map[str(d["id"])] = d["channel_username"]
+        if d.get("channel_id"):
+            domain_channel_map[str(d["id"])] = d["channel_id"]
 
     # Embed → deduplicate → cluster
     embedder = EmbeddingClient()
@@ -479,29 +600,92 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
     except Exception:
         digest_text = "\n\n".join(summaries)
 
-    # Post-process: replace [msg_id: N] with t.me links
-    msg_url_map: dict[int, str] = {}
+    # Build telegram_msg_id → message meta for link resolution.
+    msgid_to_meta: dict[int, dict] = {}
     for m in messages:
-        msg_id = m.get("telegram_msg_id", 0)
-        domain_id = str(m.get("domain_id", ""))
-        username = domain_username_map.get(domain_id, "")
-        if username and msg_id:
-            msg_url_map[msg_id] = f"https://t.me/{username}/{msg_id}"
+        mid = m.get("telegram_msg_id", 0)
+        if not mid:
+            continue
+        did = str(m.get("domain_id", ""))
+        msgid_to_meta[mid] = {
+            "id": str(m.get("id", "")),
+            "domain_id": did,
+            "channel_id": domain_channel_map.get(did),
+            "username": domain_username_map.get(did),
+            "topic_id": m.get("topic_id"),
+        }
 
-    def _replace_ref(match):
-        mid = int(match.group(1))
-        url = msg_url_map.get(mid)
-        if url:
-            return f" [→]({url})"
-        return ""
-
-    digest_text = re.sub(r'\[msg_id:\s*(\d+)\]', _replace_ref, digest_text)
+    topics, links, markdown = _structure_digest(digest_text, msgid_to_meta)
 
     return {
-        "digest": digest_text,
+        "digest": markdown,
+        "topics": topics,
+        "links": links,
         "period": period,
         "message_count": len(messages),
         "cluster_count": len(clusters),
+    }
+
+
+async def set_digest_schedule(
+    owner_id: int,
+    frequency_hours: int,
+    scope: str = "all",
+    send_hour_utc: int = 8,
+) -> dict:
+    """Create/update the user's scheduled digest cadence.
+
+    frequency_hours: how often to send (minimum 1; the scheduler ticks hourly).
+      For < 24 it fires on any hourly tick; for >= 24 it fires at send_hour_utc.
+    scope: "all", "@username", "folder:Name", or a domain UUID.
+    """
+    from uuid import UUID as _UUID
+    from agent_memory_mcp.db import queries_digest as dq
+    from agent_memory_mcp.db import queries_groups as gq
+
+    freq = max(1, int(frequency_hours))
+    hour = min(23, max(0, int(send_hour_utc)))
+
+    # Resolve scope → (scope_type, scope_id) understood by the digest runner.
+    scope_type, scope_id = "all", None
+    s = (scope or "all").strip()
+    if s and s.lower() != "all":
+        if s.lower().startswith("folder:"):
+            name = s[7:].strip()
+            for g in await gq.list_groups(async_engine, owner_id):
+                if g["name"].lower() == name.lower():
+                    scope_type, scope_id = "group", g["id"]
+                    break
+            else:
+                raise ScopeNotFound(scope, [g["name"] for g in await gq.list_groups(async_engine, owner_id)])
+        else:
+            # @username or domain UUID → single domain
+            domains = await db_q.list_domains(async_engine, owner_id)
+            handle = s.lstrip("@").lower()
+            match = None
+            for d in domains:
+                if str(d["id"]) == s or (d.get("channel_username") or "").lower() == handle:
+                    match = d
+                    break
+            if not match:
+                raise ScopeNotFound(scope, [f"@{d['channel_username']}" for d in domains if d.get("channel_username")])
+            scope_type, scope_id = "domain", match["id"]
+
+    config = await dq.create_digest_config(
+        async_engine,
+        user_id=owner_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        send_hour_utc=hour,
+        frequency_hours=freq,
+    )
+    return {
+        "status": "ok",
+        "config_id": str(config["id"]),
+        "scope": scope,
+        "frequency_hours": freq,
+        "send_hour_utc": hour,
+        "message": f"Digest scheduled every {freq}h (scope: {scope}).",
     }
 
 
