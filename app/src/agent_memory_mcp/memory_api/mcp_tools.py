@@ -186,10 +186,15 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
 
     Returns:
-        JSON with: `digest` (ready-to-show markdown with per-bullet links),
-        `topics[]` (each {emoji, label, bullets[]}; each bullet has text,
-        telegram_msg_ids[], source_message_ids[], links[]), and `links[]`.
-        Private-channel bullets carry a t.me/c/ link or an explicit
+        JSON with `digest`, `topics[]` and `links[]`.
+
+        PRESENTATION: show the `digest` field VERBATIM to the user — it is
+        ready-to-display markdown where each bullet ends with a clickable
+        markdown arrow "[→](url)". Do NOT rewrite it into "source: <number>
+        (url)" form; keep the small arrow and do not surface raw message ids
+        or URLs. Use `topics[]`/`links[]` only for programmatic access
+        (each bullet has text, telegram_msg_ids[], source_message_ids[],
+        links[]). Private-channel bullets use a t.me/c/ link, or an explicit
         "url unavailable" note when no link can be built.
     """
     owner_id = await _resolve_owner(ctx)

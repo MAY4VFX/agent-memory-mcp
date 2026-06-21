@@ -482,12 +482,14 @@ def _structure_digest(digest_text: str, msgid_to_meta: dict) -> tuple[list, list
                 if url:
                     bullet["links"].append({"msg_id": mid, "url": url})
                     links.append({"msg_id": mid, "url": url})
-                    link_strs.append(f"→ ({url})")
+                    # Clickable markdown arrow — renders as a small → linking to
+                    # the post, no raw URL/number shown.
+                    link_strs.append(f"[→]({url})")
                 else:
                     bullet["links"].append(
                         {"msg_id": mid, "url": None, "note": "private chat, url unavailable"}
                     )
-                    link_strs.append(f"→ (source: private chat, msg_id: {mid}, url unavailable)")
+                    link_strs.append(f"(source: private chat, msg_id: {mid}, url unavailable)")
             if current is None:
                 current = {"emoji": "", "label": "", "bullets": []}
                 topics.append(current)
