@@ -173,14 +173,17 @@ async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -
         log.exception("resolve_channel_failed", handle=handle, owner_id=owner_id)
         return {"status": "error", "message": f"Failed to resolve channel: {e}"}
 
+    # Private channels have no username — fall back to title for display.
+    label = f"@{info['username']}" if info.get("username") else info["title"]
+
     existing = await db_q.list_domains(async_engine, owner_id)
     for d in existing:
         if d["channel_id"] == info["channel_id"]:
             return {
                 "status": "exists",
                 "domain_id": str(d["id"]),
-                "channel": f"@{info['username']}",
-                "message": f"@{info['username']} already connected.",
+                "channel": label,
+                "message": f"{label} already connected.",
             }
 
     from datetime import datetime, timezone
@@ -204,10 +207,10 @@ async def _add_single_channel(owner_id: int, uc, handle: str, sync_range: str) -
     return {
         "status": "queued",
         "domain_id": str(domain["id"]),
-        "channel": f"@{info['username']}",
+        "channel": label,
         "title": info["title"],
         "sync_range": sync_range,
-        "message": f"✅ @{info['username']} добавлен. Синхронизация начнётся в течение 30 секунд.",
+        "message": f"✅ {label} добавлен. Синхронизация начнётся в течение 30 секунд.",
     }
 
 
