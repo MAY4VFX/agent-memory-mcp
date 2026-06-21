@@ -186,7 +186,11 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
 
     Returns:
-        Structured digest with key topics and highlights.
+        JSON with: `digest` (ready-to-show markdown with per-bullet links),
+        `topics[]` (each {emoji, label, bullets[]}; each bullet has text,
+        telegram_msg_ids[], source_message_ids[], links[]), and `links[]`.
+        Private-channel bullets carry a t.me/c/ link or an explicit
+        "url unavailable" note when no link can be built.
     """
     owner_id = await _resolve_owner(ctx)
     try:
@@ -223,17 +227,25 @@ async def get_decisions(scope: str, topic: str | None = None, ctx: Context = Non
 
 
 @mcp.tool()
-async def add_source(handle: str, source_type: str = "channel", sync_range: str = "3m", ctx: Context = None) -> str:
+async def add_source(
+    handle: str,
+    source_type: str = "channel",
+    sync_range: str = "3m",
+    sync_frequency_minutes: int | None = None,
+    ctx: Context = None,
+) -> str:
     """Connect a Telegram channel, group, or entire folder as a memory source.
 
-    For single channels: handle = @username or t.me/link
+    Works with public @usernames/t.me links and private invite links
+    (t.me/+hash or t.me/joinchat/hash — the account joins the chat).
     For folders: set source_type="folder" and handle = folder name (use list_folders to see available).
     Adding a folder imports ALL channels in it at once.
 
     Args:
-        handle: Channel @username (or folder name when source_type="folder").
+        handle: Channel @username, t.me link, or private invite link (or folder name when source_type="folder").
         source_type: "channel" for single channel, "folder" to import entire Telegram folder.
-        sync_range: How far back to sync: 1w, 1m, 3m, 6m, or 1y. Default: 3m.
+        sync_range: How far back to sync the history: 1w, 1m, 3m, 6m, or 1y. Default: 3m.
+        sync_frequency_minutes: How often to re-sync for new messages. Default 60, minimum 5.
 
     Returns:
         Status of the source addition. For folders: list of added and skipped channels.
@@ -241,7 +253,36 @@ async def add_source(handle: str, source_type: str = "channel", sync_range: str 
     owner_id = await _resolve_owner(ctx)
     result = await service.add_source(
         owner_id=owner_id, handle=handle, source_type=source_type, sync_range=sync_range,
+        sync_frequency_minutes=sync_frequency_minutes,
     )
+    return _ok(result)
+
+
+@mcp.tool()
+async def set_digest_schedule(
+    frequency_hours: int,
+    scope: str = "all",
+    send_hour_utc: int = 8,
+    ctx: Context = None,
+) -> str:
+    """Schedule a recurring digest that the bot sends to the user automatically.
+
+    Args:
+        frequency_hours: How often to send the digest, in hours (e.g. 2 = every 2 hours, 24 = daily). Minimum 1.
+        scope: What to digest — "all", "@username", "folder:Name", or a domain id. Default: "all".
+        send_hour_utc: For daily/multi-day cadence (>= 24h), the UTC hour to send at (0-23). Ignored for sub-daily. Default: 8.
+
+    Returns:
+        The saved digest schedule.
+    """
+    owner_id = await _resolve_owner(ctx)
+    try:
+        result = await service.set_digest_schedule(
+            owner_id=owner_id, frequency_hours=frequency_hours,
+            scope=scope, send_hour_utc=send_hour_utc,
+        )
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
     return _ok(result)
 
 

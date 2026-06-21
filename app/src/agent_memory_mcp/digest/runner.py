@@ -110,12 +110,18 @@ async def run_digest(
             scored = _score_messages(filtered)
             top_messages = scored[:_DIGEST_MAX_MESSAGES]
 
-            # Build domain_id → username map for links
+            # Build domain_id → username / channel_id maps for links (channel_id
+            # is needed to build t.me/c/ links for private channels).
             domain_username_map: dict[str, str] = {}
+            domain_channel_map: dict[str, int] = {}
             for did in domain_ids:
                 d = await db_q.get_domain(engine, did)
-                if d and d.get("channel_username"):
+                if not d:
+                    continue
+                if d.get("channel_username"):
                     domain_username_map[str(d["id"])] = d["channel_username"]
+                if d.get("channel_id"):
+                    domain_channel_map[str(d["id"])] = d["channel_id"]
 
             # --- Cluster-based pipeline ---
             # 1. Embed
@@ -179,7 +185,7 @@ async def run_digest(
 
             # Format digest with t.me links (→ arrows, no [ссылка])
             digest_html = _format_digest_html(
-                digest_raw.strip(), deduped_msgs, domain_username_map,
+                digest_raw.strip(), deduped_msgs, domain_username_map, domain_channel_map,
             )
 
             # Get previous digest for navigation link
@@ -370,33 +376,44 @@ def _format_digest_html(
     digest_text: str,
     messages: list[dict],
     domain_username_map: dict[str, str],
+    domain_channel_map: dict[str, int] | None = None,
 ) -> str:
-    """Replace [msg_id: N] with clickable → arrows, format HTML."""
+    """Replace [msg_id: N] with clickable → arrows, format HTML.
+
+    Builds public t.me/<user> links and private t.me/c/<id> links (from
+    channel_id) for members. When no link can be built, emits an explicit
+    "ссылка недоступна" note instead of silently dropping the reference.
+    """
     import html as html_mod
 
+    domain_channel_map = domain_channel_map or {}
     text = html_mod.escape(digest_text)
     # Restore bold markers
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
 
-    # Build msg_id → url map
+    # Build msg_id → url map (public username or private channel_id fallback)
     from agent_memory_mcp.utils.links import make_tme_link
 
     msg_url_map: dict[int, str] = {}
     for m in messages:
         msg_id = m.get("telegram_msg_id", 0)
+        if not msg_id:
+            continue
         domain_id = str(m.get("domain_id", ""))
-        username = domain_username_map.get(domain_id, "")
-        if username and msg_id:
-            topic_id = m.get("topic_id")
-            msg_url_map[msg_id] = make_tme_link(username, msg_id, topic_id)
+        url = make_tme_link(
+            domain_username_map.get(domain_id), msg_id,
+            m.get("topic_id"), domain_channel_map.get(domain_id),
+        )
+        if url:
+            msg_url_map[msg_id] = url
 
-    # Replace [msg_id: 123] with clickable → arrow
+    # Replace [msg_id: 123] with clickable → arrow, or an explicit note if no link
     def _replace_ref(match):
         mid = int(match.group(1))
         url = msg_url_map.get(mid)
         if url:
             return f' <a href="{url}">→</a>'
-        return ""
+        return f' <i>(приватный чат, msg_id: {mid}, ссылка недоступна)</i>'
 
     text = re.sub(r'\[msg_id:\s*(\d+)\]', _replace_ref, text)
 

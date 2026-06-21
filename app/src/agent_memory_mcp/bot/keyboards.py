@@ -389,6 +389,8 @@ def _digest_scope_label(config: dict) -> str:
 
 # Digest cadence options (hours) \u2192 button label
 _DIGEST_FREQ_OPTIONS = [
+    (1, "\u041a\u0430\u0436\u0434\u044b\u0439 \u0447\u0430\u0441"),
+    (2, "\u041a\u0430\u0436\u0434\u044b\u0435 2 \u0447\u0430\u0441\u0430"),
     (6, "\u041a\u0430\u0436\u0434\u044b\u0435 6 \u0447"),
     (12, "\u041a\u0430\u0436\u0434\u044b\u0435 12 \u0447"),
     (24, "\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e"),
