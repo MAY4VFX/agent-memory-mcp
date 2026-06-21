@@ -158,7 +158,9 @@ async def run_digest(
             labeled = await _label_clusters(clusters, domain_username_map)
 
             # 5. MAP per-cluster (parallel, Tier2)
-            cluster_summaries = await _map_clusters(labeled, domain_username_map)
+            cluster_summaries = await _map_clusters(
+                labeled, domain_username_map, focus=config.get("focus"),
+            )
 
             if not cluster_summaries:
                 await dq.update_digest_run(
@@ -297,8 +299,11 @@ async def _label_clusters(
 async def _map_clusters(
     clusters: list[Cluster],
     domain_map: dict[str, str],
+    focus: str | None = None,
 ) -> list[str]:
     """MAP phase: summarize each cluster via Tier2 LLM."""
+    from agent_memory_mcp.llm.digest_prompts import build_focus_block
+    focus_block = build_focus_block(focus)
     semaphore = asyncio.Semaphore(8)
 
     async def _map_one(cluster: Cluster) -> str:
@@ -310,7 +315,7 @@ async def _map_clusters(
             for p in cluster.messages
         )
         prompt = MAP_DIGEST_SYSTEM.format(
-            cluster_label=cluster_label, posts=posts_text,
+            cluster_label=cluster_label, focus_block=focus_block, posts=posts_text,
         )
         async with semaphore:
             result = await llm_call(

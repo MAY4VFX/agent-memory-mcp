@@ -23,6 +23,7 @@ async def create_digest_config(
     scope_id: UUID | None = None,
     send_hour_utc: int = 8,
     frequency_hours: int = 24,
+    focus: str | None = None,
 ) -> dict:
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -35,6 +36,7 @@ async def create_digest_config(
             scope_id=scope_id,
             send_hour_utc=send_hour_utc,
             frequency_hours=frequency_hours,
+            focus=focus,
         )
         .on_conflict_do_update(
             constraint="digest_configs_user_id_name_key",
@@ -43,6 +45,7 @@ async def create_digest_config(
                 "scope_id": scope_id,
                 "send_hour_utc": send_hour_utc,
                 "frequency_hours": frequency_hours,
+                "focus": focus,
                 "is_active": True,
             },
         )

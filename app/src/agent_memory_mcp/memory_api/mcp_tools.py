@@ -175,7 +175,7 @@ async def search_memory(query: str, scope: str | None = None, limit: int = 10, s
 
 
 @mcp.tool()
-async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str:
+async def get_digest(scope: str, period: str = "7d", focus: str | None = None, ctx: Context = None) -> str:
     """Get a digest of Telegram conversations for a period.
 
     For large channels this may take 1-2 minutes (embedding + clustering + LLM).
@@ -184,6 +184,11 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     Args:
         scope: Source scope — "all", "@username", "folder:Name", or domain_id. Use list_scopes to see available options.
         period: Time period for the digest: 1d, 3d, 7d, or 30d. Default: 7d.
+        focus: Optional free-text instruction steering what to extract/emphasize.
+            Default extraction targets news/announcements/products and drops
+            chat-like replies, questions and opinions. Set a focus to override
+            that — e.g. for a work chat: "deadlines, agreements, decisions, open
+            questions, blockers". Omit for the default news policy.
 
     Returns:
         JSON with `digest`, `topics[]` and `links[]`.
@@ -200,7 +205,7 @@ async def get_digest(scope: str, period: str = "7d", ctx: Context = None) -> str
     owner_id = await _resolve_owner(ctx)
     try:
         result = await asyncio.wait_for(
-            service.get_digest(owner_id=owner_id, scope=scope, period=period),
+            service.get_digest(owner_id=owner_id, scope=scope, period=period, focus=focus),
             timeout=180,
         )
     except ScopeNotFound as e:
@@ -268,6 +273,7 @@ async def set_digest_schedule(
     frequency_hours: int,
     scope: str = "all",
     send_hour_utc: int = 8,
+    focus: str | None = None,
     ctx: Context = None,
 ) -> str:
     """Schedule a recurring digest that the bot sends to the user automatically.
@@ -276,6 +282,9 @@ async def set_digest_schedule(
         frequency_hours: How often to send the digest, in hours (e.g. 2 = every 2 hours, 24 = daily). Minimum 1.
         scope: What to digest — "all", "@username", "folder:Name", or a domain id. Default: "all".
         send_hour_utc: For daily/multi-day cadence (>= 24h), the UTC hour to send at (0-23). Ignored for sub-daily. Default: 8.
+        focus: Optional free-text extraction focus applied to every run, e.g. for
+            a work chat: "deadlines, agreements, decisions, open questions,
+            blockers". Omit for the default news-oriented policy.
 
     Returns:
         The saved digest schedule.
@@ -284,7 +293,7 @@ async def set_digest_schedule(
     try:
         result = await service.set_digest_schedule(
             owner_id=owner_id, frequency_hours=frequency_hours,
-            scope=scope, send_hour_utc=send_hour_utc,
+            scope=scope, send_hour_utc=send_hour_utc, focus=focus,
         )
     except ScopeNotFound as e:
         return _scope_not_found_response(e)

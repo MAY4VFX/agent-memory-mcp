@@ -505,16 +505,23 @@ def _structure_digest(digest_text: str, msgid_to_meta: dict) -> tuple[list, list
     return topics, links, markdown
 
 
-async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
-    """Generate a digest via map-reduce clustering."""
-    import re
+async def get_digest(
+    owner_id: int, scope: str, period: str = "7d", focus: str | None = None,
+) -> dict:
+    """Generate a digest via map-reduce clustering.
+
+    focus: optional free-text instruction steering what to extract (e.g.
+    "deadlines, decisions, open questions"). None = default news policy.
+    """
     from datetime import datetime, timedelta, timezone
     from agent_memory_mcp.digest.clustering import cluster_messages, deduplicate, embed_messages
     from agent_memory_mcp.llm.client import llm_call, llm_call_json
     from agent_memory_mcp.llm.digest_prompts import (
-        CLUSTER_LABEL_PROMPT, MAP_DIGEST_SYSTEM, REDUCE_DIGEST_SYSTEM,
+        CLUSTER_LABEL_PROMPT, MAP_DIGEST_SYSTEM, REDUCE_DIGEST_SYSTEM, build_focus_block,
     )
     from agent_memory_mcp.storage.embedding_client import EmbeddingClient
+
+    focus_block = build_focus_block(focus)
 
     domain_ids = await _resolve_scope(owner_id, scope)
     if not domain_ids:
@@ -572,7 +579,7 @@ async def get_digest(owner_id: int, scope: str, period: str = "7d") -> dict:
                 model="tier1/extraction",
                 messages=[
                     {"role": "system", "content": MAP_DIGEST_SYSTEM.format(
-                        cluster_label=cluster_label, posts=posts_text,
+                        cluster_label=cluster_label, focus_block=focus_block, posts=posts_text,
                     )},
                     {"role": "user", "content": posts_text},
                 ],
@@ -634,12 +641,15 @@ async def set_digest_schedule(
     frequency_hours: int,
     scope: str = "all",
     send_hour_utc: int = 8,
+    focus: str | None = None,
 ) -> dict:
     """Create/update the user's scheduled digest cadence.
 
     frequency_hours: how often to send (minimum 1; the scheduler ticks hourly).
       For < 24 it fires on any hourly tick; for >= 24 it fires at send_hour_utc.
     scope: "all", "@username", "folder:Name", or a domain UUID.
+    focus: optional free-text extraction focus (e.g. "deadlines, decisions,
+      open questions"). None keeps the default news-oriented policy.
     """
     from uuid import UUID as _UUID
     from agent_memory_mcp.db import queries_digest as dq
@@ -680,6 +690,7 @@ async def set_digest_schedule(
         scope_id=scope_id,
         send_hour_utc=hour,
         frequency_hours=freq,
+        focus=(focus.strip() if focus and focus.strip() else None),
     )
     return {
         "status": "ok",
@@ -687,6 +698,7 @@ async def set_digest_schedule(
         "scope": scope,
         "frequency_hours": freq,
         "send_hour_utc": hour,
+        "focus": config.get("focus"),
         "message": f"Digest scheduled every {freq}h (scope: {scope}).",
     }
 
