@@ -47,6 +47,66 @@ def _parse_channel_username(link: str) -> str:
     return link
 
 
+async def _resolve_invite(client, invite_hash: str) -> dict:
+    """Resolve a private invite hash, joining the chat if not already a member."""
+    from telethon.errors import (
+        InviteHashExpiredError,
+        InviteHashInvalidError,
+        UserAlreadyParticipantError,
+    )
+    from telethon.tl.functions.messages import (
+        CheckChatInviteRequest,
+        ImportChatInviteRequest,
+    )
+    from telethon.tl.types import ChatInviteAlready
+
+    try:
+        invite = await client(CheckChatInviteRequest(invite_hash))
+    except (InviteHashExpiredError, InviteHashInvalidError) as e:
+        raise ValueError(f"Invalid or expired invite link: {e}") from e
+
+    if isinstance(invite, ChatInviteAlready):
+        # Already a member — invite.chat is the resolved entity.
+        chat = invite.chat
+    else:
+        # ChatInvite / ChatInvitePeek — join to get persistent access.
+        try:
+            updates = await client(ImportChatInviteRequest(invite_hash))
+            chat = updates.chats[0] if updates.chats else None
+        except UserAlreadyParticipantError:
+            chat = getattr(invite, "chat", None)
+        except (InviteHashExpiredError, InviteHashInvalidError) as e:
+            raise ValueError(f"Invalid or expired invite link: {e}") from e
+
+    if not isinstance(chat, Channel):
+        raise ValueError("Invite link does not resolve to a channel/supergroup")
+    return {"channel_id": chat.id, "title": chat.title, "username": chat.username or ""}
+
+
+async def resolve_link(client, link: str) -> dict:
+    """Resolve a public link/@username or private invite link to channel info.
+
+    Shared by TelegramCollector and the pool's _UserCollector. Private invite
+    links (t.me/+hash, t.me/joinchat/hash) go through the invite flow; public
+    links/@usernames go through get_entity.
+
+    Returns dict with keys: channel_id, title, username (empty for private).
+    """
+    invite_hash = _parse_invite_hash(link)
+    if invite_hash:
+        return await _resolve_invite(client, invite_hash)
+
+    username = _parse_channel_username(link)
+    entity = await client.get_entity(username)
+    if not isinstance(entity, Channel):
+        raise ValueError(f"'{link}' is not a channel/supergroup")
+    return {
+        "channel_id": entity.id,
+        "title": entity.title,
+        "username": entity.username or username,
+    }
+
+
 def _content_type(msg: Message) -> str:
     if msg.photo:
         return "photo"
@@ -102,64 +162,9 @@ class TelegramCollector:
     async def resolve_channel(self, link: str) -> dict:
         """Resolve a channel link/username to basic info.
 
-        Handles public links/@usernames via get_entity, and private invite
-        links (t.me/+hash, t.me/joinchat/hash) via the invite flow (joining
-        the chat if not already a member).
-
         Returns dict with keys: channel_id, title, username (empty for private).
         """
-        invite_hash = _parse_invite_hash(link)
-        if invite_hash:
-            return await self._resolve_invite(invite_hash)
-
-        username = _parse_channel_username(link)
-        entity = await self._client.get_entity(username)
-        if not isinstance(entity, Channel):
-            raise ValueError(f"'{link}' is not a channel/supergroup")
-        return {
-            "channel_id": entity.id,
-            "title": entity.title,
-            "username": entity.username or username,
-        }
-
-    async def _resolve_invite(self, invite_hash: str) -> dict:
-        """Resolve a private invite hash, joining the chat if needed."""
-        from telethon.errors import (
-            InviteHashExpiredError,
-            InviteHashInvalidError,
-            UserAlreadyParticipantError,
-        )
-        from telethon.tl.functions.messages import (
-            CheckChatInviteRequest,
-            ImportChatInviteRequest,
-        )
-        from telethon.tl.types import ChatInviteAlready
-
-        try:
-            invite = await self._client(CheckChatInviteRequest(invite_hash))
-        except (InviteHashExpiredError, InviteHashInvalidError) as e:
-            raise ValueError(f"Invalid or expired invite link: {e}") from e
-
-        if isinstance(invite, ChatInviteAlready):
-            # Already a member — invite.chat is the resolved entity.
-            chat = invite.chat
-        else:
-            # ChatInvite / ChatInvitePeek — join to get persistent access.
-            try:
-                updates = await self._client(ImportChatInviteRequest(invite_hash))
-                chat = updates.chats[0] if updates.chats else None
-            except UserAlreadyParticipantError:
-                chat = getattr(invite, "chat", None)
-            except (InviteHashExpiredError, InviteHashInvalidError) as e:
-                raise ValueError(f"Invalid or expired invite link: {e}") from e
-
-        if not isinstance(chat, Channel):
-            raise ValueError("Invite link does not resolve to a channel/supergroup")
-        return {
-            "channel_id": chat.id,
-            "title": chat.title,
-            "username": chat.username or "",
-        }
+        return await resolve_link(self._client, link)
 
     async def fetch_messages(
         self,

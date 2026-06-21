@@ -29,20 +29,16 @@ class _UserCollector:
         self.last_used = time.monotonic()
 
     async def resolve_channel(self, link: str) -> dict:
-        """Resolve channel link → {channel_id, title, username}."""
-        from agent_memory_mcp.collector.client import _parse_channel_username
-        from telethon.tl.types import Channel
+        """Resolve channel link → {channel_id, title, username}.
 
-        username = _parse_channel_username(link)
-        entity = await self.client.get_entity(username)
-        if not isinstance(entity, Channel):
-            raise ValueError(f"'{link}' is not a channel/supergroup")
+        Handles public @usernames/links and private invite links (joining the
+        chat if needed) via the shared resolver.
+        """
+        from agent_memory_mcp.collector.client import resolve_link
+
+        info = await resolve_link(self.client, link)
         self.last_used = time.monotonic()
-        return {
-            "channel_id": entity.id,
-            "title": entity.title,
-            "username": entity.username or username,
-        }
+        return info
 
     async def get_folders(self) -> list[dict]:
         """Get user's Telegram folders with channels."""
