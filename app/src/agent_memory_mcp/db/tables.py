@@ -337,6 +337,7 @@ digest_configs = Table(
     Column("scope_id", UUID(as_uuid=True)),
     Column("send_hour_utc", Integer, server_default="8"),
     Column("frequency_hours", Integer, server_default="24", nullable=False),
+    Column("focus", Text),  # optional custom extraction focus for the digest
     Column("is_active", Boolean, server_default="true"),
     Column("last_sent_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
