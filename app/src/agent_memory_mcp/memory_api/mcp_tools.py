@@ -531,8 +531,7 @@ async def vector_search(query: str, scope: str | None = None, limit: int = 30, s
     embedder = EmbeddingClient()
     milvus = MilvusStorage()
     try:
-        vectors = await embedder.embed([query])
-        dense = vectors[0]
+        dense = await embedder.embed_query(query)
 
         since_dt = service._parse_since(since)
         if since_dt:
