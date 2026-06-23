@@ -161,6 +161,16 @@ class CollectorPool:
                     pass
                 return None
 
+            # Warm the entity cache: get_dialogs() populates access_hashes for
+            # all joined chats, so private channels (no @username) resolve via
+            # PeerChannel after a restart wiped the in-memory session cache.
+            # Without this, the first sync of a private channel post-restart
+            # cache-misses and fails every hour. Best-effort — never block connect.
+            try:
+                await client.get_dialogs()
+            except Exception:
+                log.warning("collector_warm_dialogs_failed", telegram_id=telegram_id)
+
             uc = _UserCollector(telegram_id, client)
             self._collectors[telegram_id] = uc
             await db_q.touch_telegram_session(async_engine, telegram_id)
