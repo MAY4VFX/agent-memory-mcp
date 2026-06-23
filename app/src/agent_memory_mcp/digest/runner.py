@@ -44,6 +44,26 @@ def _format_period(hours: int) -> str:
     return f"последние {days} дн."
 
 
+async def _stale_sources(engine, domain_ids: list) -> list[str]:
+    """Names of domains that haven't synced in ~2 sync cycles.
+
+    Such a domain has likely failed to sync (e.g. a private channel whose
+    entity cache was lost after a restart) rather than genuinely having no new
+    posts — surface it so an empty/partial digest isn't misleading.
+    """
+    now = datetime.now(timezone.utc)
+    stale: list[str] = []
+    for did in domain_ids:
+        d = await db_q.get_domain(engine, did)
+        if not d:
+            continue
+        freq = d.get("sync_frequency_minutes") or 60
+        last = d.get("last_synced_at")
+        if last is None or last < now - timedelta(minutes=2 * freq):
+            stale.append(d.get("channel_name") or str(did))
+    return stale
+
+
 async def run_digest(
     config: dict,
     engine: AsyncEngine,
@@ -93,11 +113,23 @@ async def run_digest(
             since = datetime.now(timezone.utc) - timedelta(hours=freq_hours)
             all_messages = await db_q.get_messages_since(engine, domain_ids, since, limit=5000)
 
+            # Flag sources that haven't synced recently — a stale/failed sync
+            # otherwise silently looks like "no new posts".
+            stale = await _stale_sources(engine, domain_ids)
+
             if not all_messages:
+                if stale:
+                    text = (
+                        f"За {period_label} новых постов нет, но источники не "
+                        f"синхронизировались: {', '.join(stale)}. "
+                        "Данные могут быть неполными."
+                    )
+                else:
+                    text = f"За {period_label} новых постов не было."
                 await dq.update_digest_run(
                     engine, run_id,
                     status="completed",
-                    digest_text=f"За {period_label} новых постов не было.",
+                    digest_text=text,
                     domain_count=len(domain_ids), message_count=0,
                     completed_at=datetime.now(timezone.utc),
                 )
@@ -189,6 +221,11 @@ async def run_digest(
             digest_html = _format_digest_html(
                 digest_raw.strip(), deduped_msgs, domain_username_map, domain_channel_map,
             )
+            if stale:
+                digest_html = (
+                    f"⚠️ <i>Источники не синхронизировались: {', '.join(stale)} — "
+                    f"данные могут быть неполными.</i>\n\n" + digest_html
+                )
 
             # Get previous digest for navigation link
             prev_run = await dq.get_last_completed_run(engine, config_id)
