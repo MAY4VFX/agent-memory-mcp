@@ -132,11 +132,22 @@ async def run_initial_ingestion(
         stats.errors.append("No threads built")
         return stats, None
 
-    # 4. Schema discovery
+    # 4. Schema discovery (also detects the work project — see SGR prompt)
+    from uuid import UUID as _UUID
+    from agent_memory_mcp.db import queries as _dbq
+    from agent_memory_mcp.db.engine import async_engine as _eng
+
+    _domain = None
+    try:
+        _domain = await _dbq.get_domain(_eng, _UUID(domain_id))
+    except Exception:
+        pass
+    _title = (_domain or {}).get("display_name") or (_domain or {}).get("channel_name") or ""
+
     try:
         discovery = SchemaDiscovery()
         sd_out = await asyncio.to_thread(
-            discovery.run, messages=enriched, domain_id=domain_id
+            discovery.run, messages=enriched, domain_id=domain_id, chat_title=_title
         )
         schema_result = sd_out["result"]
         stats.schema_discovered = True
@@ -151,6 +162,20 @@ async def run_initial_ingestion(
             detected_domain="other",
             sample_size=0,
         )
+
+    # Persist the detected work project as a label on this chat (automatic
+    # classification at ingest — no separate pass). Best-effort.
+    if _domain and getattr(schema_result, "project", ""):
+        try:
+            label_id = await _dbq.upsert_label(
+                _eng, _domain["owner_id"], "project", schema_result.project
+            )
+            await _dbq.set_domain_label(
+                _eng, _UUID(domain_id), label_id, confidence=0.8, source="content"
+            )
+            log.info("project_label_set", domain_id=domain_id, project=schema_result.project)
+        except Exception:
+            log.warning("project_label_failed", domain_id=domain_id, exc_info=True)
 
     schema = schema_result.schema
 
