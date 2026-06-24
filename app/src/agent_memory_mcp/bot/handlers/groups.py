@@ -8,21 +8,24 @@ import structlog
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from agent_memory_mcp.bot.keyboards import (
     add_sources_kb,
     domain_list_kb,
     folder_list_kb,
+    folder_multi_kb,
     group_list_kb,
     list_detail_kb,
     main_menu_kb,
     manage_kb,
     period_kb,
+    request_chat_kb,
     source_picker_kb,
     sources_hub_kb,
 )
-from agent_memory_mcp.bot.states import AddChannelStates, GroupStates
+from agent_memory_mcp.bot.states import AddChannelStates, AddSourceStates, GroupStates
+from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.collector.client import TelegramCollector
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
@@ -123,6 +126,136 @@ async def hub_add_sources(callback: CallbackQuery) -> None:
         "\u0418\u043b\u0438 \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u0443\u0439\u0442\u0435 \u0446\u0435\u043b\u0443\u044e \u043f\u0430\u043f\u043a\u0443 \u0438\u0437 Telegram:",
         reply_markup=add_sources_kb(),
     )
+
+
+# ---------------- Native Telegram chat picker ----------------
+
+@router.callback_query(F.data == "src:native")
+async def src_native(callback: CallbackQuery) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    await callback.message.answer(
+        "Нажмите кнопку ниже и выберите чат в нативном меню Telegram "
+        "(канал или группу):",
+        reply_markup=request_chat_kb(),
+    )
+
+
+def _bare_chat_id(marked: int) -> int:
+    """Bot API marked id → bare entity id (matches domains.channel_id)."""
+    s = str(marked)
+    if s.startswith("-100"):
+        return int(s[4:])
+    if s.startswith("-"):
+        return int(s[1:])
+    return marked
+
+
+@router.message(F.chat_shared)
+async def on_chat_shared(message: Message) -> None:
+    if not is_allowed_user(message.from_user.id, message.from_user.username):
+        return
+    bare = _bare_chat_id(message.chat_shared.chat_id)
+    await message.answer("Добавляю…", reply_markup=ReplyKeyboardRemove())
+    res = await service.add_source(
+        message.from_user.id, str(bare), source_type="dialog", sync_range="3m"
+    )
+    await message.answer(res.get("message") or f"Статус: {res.get('status')}")
+
+
+# ---------------- Add by link / @username / id ----------------
+
+@router.callback_query(F.data == "src:bylink")
+async def src_bylink(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    await state.set_state(AddSourceStates.waiting_input)
+    await _safe_edit(
+        callback.message,
+        "Пришлите ссылку, @username, инвайт-ссылку или числовой ID "
+        "(по одному на строку):",
+    )
+
+
+@router.message(AddSourceStates.waiting_input)
+async def on_source_input(message: Message, state: FSMContext) -> None:
+    if not is_allowed_user(message.from_user.id, message.from_user.username):
+        return
+    await state.clear()
+    lines = [l.strip() for l in (message.text or "").splitlines() if l.strip()]
+    if not lines:
+        await message.answer("Пусто.")
+        return
+    out = []
+    for h in lines:
+        st = "dialog" if h.lstrip("-").isdigit() else "channel"
+        res = await service.add_source(message.from_user.id, h, source_type=st, sync_range="3m")
+        out.append(f"• {h}: {res.get('status')}")
+    await message.answer("\n".join(out))
+
+
+# ---------------- Multi-folder import ----------------
+
+@router.callback_query(F.data == "hub:folders_multi")
+async def folders_multi(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    folders = await _user_folders(callback.from_user.id)
+    if not folders:
+        await _safe_edit(callback.message, "Папок не найдено.")
+        return
+    await state.update_data(fmulti_folders=folders, fmulti_selected=[])
+    await _safe_edit(
+        callback.message,
+        "Выберите папки для импорта (можно несколько), затем «Импортировать»:",
+        reply_markup=folder_multi_kb(folders, set()),
+    )
+
+
+@router.callback_query(F.data.startswith("fmulti:"))
+async def folders_multi_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    fid = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    folders = data.get("fmulti_folders") or await _user_folders(callback.from_user.id)
+    selected = set(data.get("fmulti_selected") or [])
+    selected.symmetric_difference_update({fid})
+    await state.update_data(fmulti_folders=folders, fmulti_selected=list(selected))
+    await _safe_edit(
+        callback.message,
+        "Выберите папки для импорта (можно несколько), затем «Импортировать»:",
+        reply_markup=folder_multi_kb(folders, selected),
+    )
+
+
+@router.callback_query(F.data == "fmulti_go")
+async def folders_multi_go(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        return
+    await callback.answer()
+    data = await state.get_data()
+    folders = {f["id"]: f for f in (data.get("fmulti_folders") or [])}
+    selected = set(data.get("fmulti_selected") or [])
+    await state.clear()
+    if not selected:
+        await _safe_edit(callback.message, "Ничего не выбрано.")
+        return
+    await _safe_edit(callback.message, "Импортирую выбранные папки…")
+    out = []
+    for fid in selected:
+        f = folders.get(fid)
+        if not f:
+            continue
+        res = await service.add_source(
+            callback.from_user.id, f["title"], source_type="folder", sync_range="3m"
+        )
+        out.append(f"📁 {f['title']}: {res.get('status')}")
+    await callback.message.answer("Готово:\n" + "\n".join(out))
 
 
 @router.callback_query(F.data.in_({"hub:manage", "hub:lists"}))
