@@ -1015,7 +1015,7 @@ async def set_domain_project_label(
             delete(domain_labels).where(
                 domain_labels.c.domain_id == domain_id,
                 domain_labels.c.label_id.in_(
-                    select(labels.c.id).where(labels.c.type == "project")
+                    select(labels.c.id).where(labels.c.type.in_(["project", "personal"]))
                 ),
                 domain_labels.c.label_id != label_id,
             )
@@ -1042,12 +1042,10 @@ async def list_labels(
         return [dict(r) for r in (await conn.execute(stmt)).mappings().all()]
 
 
-async def get_domain_label_map(
-    engine: AsyncEngine, domain_ids: list[UUID], type_: str = "project"
-) -> dict:
-    """domain_id → {label_id, name, confidence} for the given label type, picking
-    the highest-confidence label per domain. Used to stamp project_id on the
-    /activity export."""
+async def get_domain_label_map(engine: AsyncEngine, domain_ids: list[UUID]) -> dict:
+    """domain_id → {label_id, name, type, confidence} — the chat's single
+    classification label (type project=work or personal=non-work), highest
+    confidence per domain. Used to stamp project/category on the /activity export."""
     if not domain_ids:
         return {}
     stmt = (
@@ -1056,11 +1054,12 @@ async def get_domain_label_map(
             domain_labels.c.label_id,
             domain_labels.c.confidence,
             labels.c.name,
+            labels.c.type,
         )
         .select_from(domain_labels.join(labels, domain_labels.c.label_id == labels.c.id))
         .where(
             domain_labels.c.domain_id.in_(domain_ids),
-            labels.c.type == type_,
+            labels.c.type.in_(["project", "personal"]),
         )
         .order_by(domain_labels.c.confidence.desc().nullslast())
     )
@@ -1072,6 +1071,7 @@ async def get_domain_label_map(
             out[r["domain_id"]] = {
                 "label_id": str(r["label_id"]),
                 "name": r["name"],
+                "type": r["type"],
                 "confidence": r["confidence"],
             }
     return out
