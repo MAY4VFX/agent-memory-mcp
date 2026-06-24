@@ -381,6 +381,16 @@ async def list_folders(owner_id: int) -> list[dict]:
                 f"@{p['username']}" if p.get("username") else p["title"]
                 for p in f["peers"]
             ],
+            "peers": [
+                {
+                    "chat_id": p.get("chat_id") or p.get("channel_id"),
+                    "title": p["title"],
+                    "username": p.get("username", ""),
+                    "type": p.get("type", "channel"),
+                    "supported": p.get("supported", True),
+                }
+                for p in f["peers"]
+            ],
         }
         for f in folders
     ]
