@@ -174,11 +174,12 @@ class TelegramCollector:
         since_date=None,
         channel_username: str | None = None,
         use_takeout: bool = False,
+        peer_type: str = "channel",
     ) -> list[TelegramMessage]:
-        """Fetch messages from a channel.
+        """Fetch messages from a chat.
 
         Args:
-            channel_id: Telegram channel ID.
+            channel_id: Telegram chat/channel ID (bare, as stored on the domain).
             limit: Max messages to fetch (None = all available).
             min_id: Fetch messages with ID > min_id (incremental sync).
             since_date: Only fetch messages AFTER this date (newest first,
@@ -187,32 +188,41 @@ class TelegramCollector:
                 (entity cache lost after container restart).
             use_takeout: Use Telegram takeout session for lower rate limits
                 (recommended for initial sync of large chats).
+            peer_type: "channel" (channel/supergroup → PeerChannel) or "chat"
+                (basic group → PeerChat).
 
         Returns:
             List of TelegramMessage objects, oldest-first.
         """
-        # Try PeerChannel first (fast, uses session cache).
-        # Fall back to username resolution if cache is stale.
-        try:
-            entity = await self._client.get_entity(PeerChannel(channel_id))
-        except ValueError:
-            if channel_username:
-                log.warning(
-                    "peer_channel_cache_miss_fallback_username",
-                    channel_id=channel_id,
-                    username=channel_username,
-                )
-                entity = await self._client.get_entity(channel_username)
-            else:
-                # Private channel (no username): refresh the dialog cache so the
-                # access_hash for joined channels is re-populated after a restart,
-                # then retry the PeerChannel lookup.
-                log.warning(
-                    "peer_channel_cache_miss_refresh_dialogs",
-                    channel_id=channel_id,
-                )
+        if peer_type == "chat":
+            # Basic group: PeerChat needs no access_hash. Refresh dialogs and
+            # retry once on a cold cache.
+            from telethon.tl.types import PeerChat
+            try:
+                entity = await self._client.get_entity(PeerChat(channel_id))
+            except (ValueError, Exception):
                 await self._client.get_dialogs()
+                entity = await self._client.get_entity(PeerChat(channel_id))
+        else:
+            # Channel/supergroup: PeerChannel first (fast, uses session cache),
+            # fall back to username, else refresh dialogs and retry.
+            try:
                 entity = await self._client.get_entity(PeerChannel(channel_id))
+            except ValueError:
+                if channel_username:
+                    log.warning(
+                        "peer_channel_cache_miss_fallback_username",
+                        channel_id=channel_id,
+                        username=channel_username,
+                    )
+                    entity = await self._client.get_entity(channel_username)
+                else:
+                    log.warning(
+                        "peer_channel_cache_miss_refresh_dialogs",
+                        channel_id=channel_id,
+                    )
+                    await self._client.get_dialogs()
+                    entity = await self._client.get_entity(PeerChannel(channel_id))
 
         if use_takeout:
             return await self._fetch_with_takeout(

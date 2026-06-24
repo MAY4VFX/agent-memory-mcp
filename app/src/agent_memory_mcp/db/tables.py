@@ -58,6 +58,9 @@ domains = Table(
     Column("channel_id", BigInteger, nullable=False),
     Column("channel_username", String(128)),
     Column("channel_name", String(255)),
+    # How to resolve the Telegram entity for fetch: "channel" (channel/
+    # supergroup, via PeerChannel) or "chat" (basic group, via PeerChat).
+    Column("peer_type", String(16), server_default="channel"),
     Column("emoji", String(8), server_default="'\U0001f4da'"),
     Column("display_name", String(255)),
     Column("domain_type", String(64)),
