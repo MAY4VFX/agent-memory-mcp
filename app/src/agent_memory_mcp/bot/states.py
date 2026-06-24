@@ -4,11 +4,8 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AddChannelStates(StatesGroup):
-    waiting_link = State()
     choosing_period = State()
     choosing_frequency = State()
-    choosing_emoji = State()
-    naming_batch_list = State()
     processing = State()
 
 
