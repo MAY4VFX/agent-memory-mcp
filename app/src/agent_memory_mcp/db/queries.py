@@ -1001,6 +1001,23 @@ async def set_domain_label(
         await conn.execute(stmt)
 
 
+async def get_sender_domains(engine: AsyncEngine, domain_ids: list[UUID]) -> list[tuple]:
+    """Distinct (sender_id, domain_id) pairs across the given domains.
+
+    Lets the classifier tell that a DM partner (whose user id == the DM domain's
+    channel_id) also participates in a work group chat — an indirect signal that
+    the DM is work-related, no hardcoding."""
+    if not domain_ids:
+        return []
+    stmt = (
+        select(messages.c.sender_id, messages.c.domain_id)
+        .where(messages.c.domain_id.in_(domain_ids), messages.c.sender_id.isnot(None))
+        .distinct()
+    )
+    async with engine.begin() as conn:
+        return [(r[0], r[1]) for r in (await conn.execute(stmt)).all()]
+
+
 async def set_domain_project_label(
     engine: AsyncEngine,
     domain_id: UUID,
