@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -132,6 +133,7 @@ messages = Table(
     Column("hashtags", JSONB),
     Column("content_tsv", TSVECTOR, nullable=True),
     Column("is_noise", Boolean, server_default="false"),
+    Column("read_at", DateTime(timezone=True)),  # when the owner read it (live listener)
     Column("msg_date", DateTime(timezone=True), nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("domain_id", "telegram_msg_id"),
@@ -167,6 +169,52 @@ threads = Table(
     Column("first_msg_date", DateTime(timezone=True)),
     Column("last_msg_date", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
+)
+
+labels = Table(
+    # Abstract cross-cutting label entity. `type` is open-ended — `project` and
+    # `task` are the first two types (cross-source workload), with room for
+    # `client`, `topic`, etc. without schema changes. Keeps the product generic
+    # rather than hard-coding one user's project taxonomy.
+    "labels",
+    metadata,
+    Column(
+        "id",
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("owner_id", BigInteger, ForeignKey("users.telegram_id"), nullable=False),
+    Column("type", String(32), nullable=False),  # project | task | client | topic | …
+    Column("name", String(255), nullable=False),
+    Column("aliases", JSONB),  # ["Зенит", "Zenith", "ПРЖ-Зенит"]
+    Column("created_at", DateTime(timezone=True), server_default=text("now()")),
+    UniqueConstraint("owner_id", "type", "name"),
+    Index("idx_labels_owner_type", "owner_id", "type"),
+)
+
+domain_labels = Table(
+    # Chat → label attribution (the reliable "chat = project" signal). Message-
+    # and thread-level attribution (e.g. task) comes later; domain-level is what
+    # the /activity export needs to stamp project_id per message.
+    "domain_labels",
+    metadata,
+    Column(
+        "domain_id",
+        UUID(as_uuid=True),
+        ForeignKey("domains.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "label_id",
+        UUID(as_uuid=True),
+        ForeignKey("labels.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("confidence", Float),
+    Column("source", String(16)),  # title | content | graph | manual
+    Column("created_at", DateTime(timezone=True), server_default=text("now()")),
+    PrimaryKeyConstraint("domain_id", "label_id"),
 )
 
 conversations = Table(

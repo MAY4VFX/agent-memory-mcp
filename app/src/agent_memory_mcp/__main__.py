@@ -111,6 +111,13 @@ async def main() -> None:
     pool_mod.collector_pool = cpool  # set module-level singleton
     log.info("collector_pool_started")
 
+    # Cross-source workload: live read-receipt listener (gated, default off).
+    read_listener = None
+    if settings.run_read_listener:
+        from agent_memory_mcp.collector.read_listener import ReadListenerManager
+        read_listener = ReadListenerManager(cpool)
+        await read_listener.start()
+
     # Create bot + dispatcher
     bot = create_bot()
     dp = create_dispatcher()
@@ -163,6 +170,8 @@ async def main() -> None:
         api_task.cancel()
         scheduler.stop()
         scheduler_task.cancel()
+        if read_listener:
+            await read_listener.stop()
         if collector:
             await collector.disconnect()
         await cpool.shutdown()
