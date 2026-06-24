@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # --- MCP ---
     run_mcp: bool = True
 
+    # --- Read listener (cross-source workload) ---
+    # Off by default: keeps long-lived per-user Telethon connections to capture
+    # message read-time (UpdateReadHistoryInbox). Enable once load-tested.
+    run_read_listener: bool = False
+    read_listener_refresh_seconds: int = 300
+
     # --- TON ---
     ton_wallet_address: str = ""
     ton_api_url: str = "https://toncenter.com/api/v3"

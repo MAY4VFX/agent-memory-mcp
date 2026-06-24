@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, func, insert, select, text, update
+from sqlalchemy import and_, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_memory_mcp.db.tables import (
     channel_schemas,
+    domain_labels,
     domains,
     hashtag_summaries,
+    labels,
     messages,
     sync_jobs,
     telegram_sessions,
@@ -842,6 +844,205 @@ async def get_messages_since(
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+async def get_activity_events(
+    engine: AsyncEngine,
+    domain_ids: list[UUID],
+    since: "datetime",
+    until: "datetime | None" = None,
+    after_date: "datetime | None" = None,
+    after_id: "UUID | None" = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """Raw message metadata across domains, oldest-first, keyset-paginated.
+
+    Powers the cross-source workload resolver's incremental drain of
+    communication activity. Returns metadata only — message ``content`` is never
+    selected here, only its length. Keyset cursor is ``(msg_date, id)`` so a
+    caller can page forward without offset drift as new messages arrive.
+    """
+    if not domain_ids:
+        return []
+    conds = [
+        messages.c.domain_id.in_(domain_ids),
+        messages.c.msg_date >= since,
+        messages.c.is_noise.is_(False),
+    ]
+    if until is not None:
+        conds.append(messages.c.msg_date < until)
+    if after_date is not None and after_id is not None:
+        conds.append(
+            or_(
+                messages.c.msg_date > after_date,
+                and_(messages.c.msg_date == after_date, messages.c.id > after_id),
+            )
+        )
+    stmt = (
+        select(
+            messages.c.id,
+            messages.c.domain_id,
+            messages.c.telegram_msg_id,
+            messages.c.reply_to_msg_id,
+            messages.c.topic_id,
+            messages.c.thread_id,
+            messages.c.sender_id,
+            messages.c.content_type,
+            func.length(messages.c.content).label("char_len"),
+            messages.c.msg_date,
+            messages.c.read_at,
+        )
+        .where(*conds)
+        .order_by(messages.c.msg_date.asc(), messages.c.id.asc())
+        .limit(limit)
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Read receipts (live listener → workload time model)
+# ---------------------------------------------------------------------------
+
+async def list_active_telegram_sessions(engine: AsyncEngine) -> list[int]:
+    """telegram_ids with an active stored session — candidates for a read listener."""
+    stmt = select(telegram_sessions.c.telegram_id).where(
+        telegram_sessions.c.is_active.is_(True)
+    )
+    async with engine.begin() as conn:
+        return [r[0] for r in (await conn.execute(stmt)).all()]
+
+
+async def stamp_read_until(
+    engine: AsyncEngine,
+    owner_id: int,
+    channel_id: int,
+    max_msg_id: int,
+    read_at: "datetime",
+) -> int:
+    """Stamp read_at on inbound messages of a chat up to max_msg_id.
+
+    Only fills NULL read_at (first read wins) and skips the owner's own outbound
+    messages. Returns the number of rows stamped.
+    """
+    stmt = (
+        update(messages)
+        .where(
+            messages.c.read_at.is_(None),
+            messages.c.telegram_msg_id <= max_msg_id,
+            messages.c.sender_id.isnot(None),
+            messages.c.sender_id != owner_id,
+            messages.c.domain_id.in_(
+                select(domains.c.id).where(
+                    domains.c.owner_id == owner_id,
+                    domains.c.channel_id == channel_id,
+                )
+            ),
+        )
+        .values(read_at=read_at)
+    )
+    async with engine.begin() as conn:
+        result = await conn.execute(stmt)
+        return result.rowcount or 0
+
+
+# ---------------------------------------------------------------------------
+# Labels (cross-source workload attribution)
+# ---------------------------------------------------------------------------
+
+async def upsert_label(
+    engine: AsyncEngine,
+    owner_id: int,
+    type_: str,
+    name: str,
+    aliases: list[str] | None = None,
+) -> UUID:
+    """Create or fetch a label by (owner, type, name). Merges aliases. Returns id."""
+    ins = pg_insert(labels).values(
+        owner_id=owner_id, type=type_, name=name, aliases=aliases
+    )
+    stmt = ins.on_conflict_do_update(
+        index_elements=["owner_id", "type", "name"],
+        set_={"aliases": ins.excluded.aliases},
+    ).returning(labels.c.id)
+    async with engine.begin() as conn:
+        return (await conn.execute(stmt)).scalar_one()
+
+
+async def set_domain_label(
+    engine: AsyncEngine,
+    domain_id: UUID,
+    label_id: UUID,
+    confidence: float | None,
+    source: str | None,
+) -> None:
+    """Attach (or refresh) a label on a chat/domain."""
+    stmt = (
+        pg_insert(domain_labels)
+        .values(
+            domain_id=domain_id,
+            label_id=label_id,
+            confidence=confidence,
+            source=source,
+        )
+        .on_conflict_do_update(
+            index_elements=["domain_id", "label_id"],
+            set_={
+                "confidence": confidence,
+                "source": source,
+                "created_at": text("now()"),
+            },
+        )
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
+
+
+async def list_labels(
+    engine: AsyncEngine, owner_id: int, type_: str | None = None
+) -> list[dict]:
+    stmt = select(labels).where(labels.c.owner_id == owner_id)
+    if type_:
+        stmt = stmt.where(labels.c.type == type_)
+    stmt = stmt.order_by(labels.c.type, labels.c.name)
+    async with engine.begin() as conn:
+        return [dict(r) for r in (await conn.execute(stmt)).mappings().all()]
+
+
+async def get_domain_label_map(
+    engine: AsyncEngine, domain_ids: list[UUID], type_: str = "project"
+) -> dict:
+    """domain_id → {label_id, name, confidence} for the given label type, picking
+    the highest-confidence label per domain. Used to stamp project_id on the
+    /activity export."""
+    if not domain_ids:
+        return {}
+    stmt = (
+        select(
+            domain_labels.c.domain_id,
+            domain_labels.c.label_id,
+            domain_labels.c.confidence,
+            labels.c.name,
+        )
+        .select_from(domain_labels.join(labels, domain_labels.c.label_id == labels.c.id))
+        .where(
+            domain_labels.c.domain_id.in_(domain_ids),
+            labels.c.type == type_,
+        )
+        .order_by(domain_labels.c.confidence.desc().nullslast())
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+    out: dict = {}
+    for r in rows:  # first row per domain wins (highest confidence)
+        if r["domain_id"] not in out:
+            out[r["domain_id"]] = {
+                "label_id": str(r["label_id"]),
+                "name": r["name"],
+                "confidence": r["confidence"],
+            }
+    return out
 
 
 # ---------------------------------------------------------------------------
