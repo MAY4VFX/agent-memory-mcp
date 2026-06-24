@@ -21,4 +21,6 @@ RUN pip install --no-deps --no-cache-dir .
 
 EXPOSE 8002
 
-CMD ["sh", "-c", "alembic upgrade head && python -m agent_memory_mcp"]
+# AMM_ROLE=listener → dedicated read-receipt listener (own loop, isolated from
+# the bot). Anything else → the bot/API/scheduler process (runs migrations).
+CMD ["sh", "-c", "if [ \"$AMM_ROLE\" = listener ]; then python -m agent_memory_mcp.listener_main; else alembic upgrade head && python -m agent_memory_mcp; fi"]
