@@ -27,16 +27,16 @@ class SchemaDiscovery:
     """Discover entity/relation schema from a sample of messages using LLM."""
 
     @component.output_types(result=SchemaDiscoveryResult)
-    def run(self, messages: list[ProcessedMessage], domain_id: str) -> dict:
+    def run(self, messages: list[ProcessedMessage], domain_id: str, chat_title: str = "") -> dict:
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(self._discover(messages, domain_id))
+            result = loop.run_until_complete(self._discover(messages, domain_id, chat_title))
         finally:
             loop.close()
         return {"result": result}
 
     async def _discover(
-        self, messages: list[ProcessedMessage], domain_id: str
+        self, messages: list[ProcessedMessage], domain_id: str, chat_title: str = ""
     ) -> SchemaDiscoveryResult:
         sample_size = settings.schema_discovery_sample_size
         # Filter messages with text
@@ -62,8 +62,9 @@ class SchemaDiscovery:
             lines.append(f"[{i}] [{sender}] {msg.text}")
         messages_text = "\n".join(lines)
 
+        title_line = f"Название чата: {chat_title}\n\n" if chat_title else ""
         user_prompt = (
-            f"Вот выборка из {len(sample)} сообщений канала:\n\n{messages_text}"
+            f"{title_line}Вот выборка из {len(sample)} сообщений канала:\n\n{messages_text}"
         )
 
         log.info("schema_discovery_start", domain_id=domain_id, sample_size=len(sample))
@@ -110,8 +111,11 @@ class SchemaDiscovery:
             relation_types=len(relation_types),
         )
 
+        project = (raw.get("project") or "").strip() if raw.get("is_work", True) else ""
+
         return SchemaDiscoveryResult(
             schema=schema,
             detected_domain=schema.domain_type,
+            project=project,
             sample_size=len(sample),
         )

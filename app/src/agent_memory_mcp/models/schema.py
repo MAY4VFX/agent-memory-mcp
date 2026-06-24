@@ -35,5 +35,6 @@ class SchemaDiscoveryResult(BaseModel):
 
     schema: DomainSchema
     detected_domain: str = ""
+    project: str = ""  # work project this chat belongs to ("" = personal/non-work)
     sample_size: int = 0
     langfuse_trace_id: str = ""
