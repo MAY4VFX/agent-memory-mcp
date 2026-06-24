@@ -6,6 +6,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    KeyboardButtonRequestChat,
     ReplyKeyboardMarkup,
 )
 
@@ -222,9 +223,56 @@ def skip_list_name_kb() -> InlineKeyboardMarkup:
 def add_sources_kb() -> InlineKeyboardMarkup:
     """Sub-menu for adding sources."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f4c2 \u0418\u043c\u043f\u043e\u0440\u0442 \u0438\u0437 \u043f\u0430\u043f\u043a\u0438 TG", callback_data="hub:folders")],
+        [InlineKeyboardButton(text="\U0001f4c7 \u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0447\u0430\u0442 \u0438\u0437 Telegram", callback_data="src:native")],
+        [InlineKeyboardButton(text="\U0001f5c2 \u0418\u043c\u043f\u043e\u0440\u0442 \u043f\u0430\u043f\u043e\u043a (\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e)", callback_data="hub:folders_multi")],
+        [InlineKeyboardButton(text="\U0001f517 \u041f\u043e \u0441\u0441\u044b\u043b\u043a\u0435 / @\u0438\u043c\u0435\u043d\u0438 / ID", callback_data="src:bylink")],
         [InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="hub:back")],
     ])
+
+
+def request_chat_kb() -> ReplyKeyboardMarkup:
+    """Native Telegram chat picker (opens TG's own dialog selector).
+
+    request_id encodes the kind so the handler knows the peer type:
+      1 = channel/supergroup-broadcast, 2 = group (basic + supergroup).
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(
+                text="\U0001f4e2 \u041a\u0430\u043d\u0430\u043b",
+                request_chat=KeyboardButtonRequestChat(
+                    request_id=1, chat_is_channel=True,
+                    bot_is_member=False, request_title=True, request_username=True,
+                ),
+            )],
+            [KeyboardButton(
+                text="\U0001f465 \u0413\u0440\u0443\u043f\u043f\u0430",
+                request_chat=KeyboardButtonRequestChat(
+                    request_id=2, chat_is_channel=False,
+                    bot_is_member=False, request_title=True, request_username=True,
+                ),
+            )],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0447\u0430\u0442 \u043a\u043d\u043e\u043f\u043a\u043e\u0439 \u0432\u044b\u0448\u0435",
+    )
+
+
+def folder_multi_kb(folders: list[dict], selected: set) -> InlineKeyboardMarkup:
+    """Multi-select folder list: tap to toggle, then import all selected."""
+    buttons = []
+    for f in folders:
+        sup = sum(1 for p in f.get("peers", []) if p.get("supported", True))
+        check = "\u2705" if f["id"] in selected else "\u2b1c"
+        label = f"{check} \U0001f4c1 {f['title']} ({sup})"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"fmulti:{f['id']}")])
+    if selected:
+        buttons.append([InlineKeyboardButton(
+            text=f"\u2705 \u0418\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435 ({len(selected)})",
+            callback_data="fmulti_go")])
+    buttons.append([InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="hub:add_sources")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def folder_list_kb(folders: list[dict]) -> InlineKeyboardMarkup:
