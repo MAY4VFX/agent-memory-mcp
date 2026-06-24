@@ -216,6 +216,7 @@ async def _run_initial_sync(
             since_date=since_date,
             channel_username=domain.get("channel_username"),
             use_takeout=True,
+            peer_type=domain.get("peer_type") or "channel",
         )
         await queries.update_sync_job(async_engine, job["id"], messages_fetched=len(msgs))
 
@@ -609,6 +610,7 @@ async def _finish_folder_import(
                     sync_frequency_minutes=freq,
                     emoji="\U0001f4da",
                     display_name=peer["title"][:50],
+                    peer_type="chat" if peer.get("type") == "group" else "channel",
                 )
                 domain_id = domain["id"]
                 await queries.update_domain(

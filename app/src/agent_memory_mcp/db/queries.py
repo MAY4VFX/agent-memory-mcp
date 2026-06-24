@@ -95,6 +95,7 @@ async def create_domain(
     emoji: str,
     display_name: str,
     pinned: bool = False,
+    peer_type: str = "channel",
 ) -> dict:
     stmt = (
         insert(domains)
@@ -108,6 +109,7 @@ async def create_domain(
             emoji=emoji,
             display_name=display_name,
             pinned=pinned,
+            peer_type=peer_type,
         )
         .returning(*domains.c)
     )

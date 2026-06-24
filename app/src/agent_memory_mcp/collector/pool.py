@@ -44,9 +44,8 @@ class _UserCollector:
         """List the chats the user is in (no link/admin needed — read as the user).
 
         Lets a user add private work chats they're merely a member of, which have
-        no @username and no invite link. Each entry flags `supported`: only
-        channels/supergroups sync today (fetch resolves via PeerChannel); basic
-        groups and DMs are listed but not yet ingestable.
+        no @username and no invite link. Each entry flags `supported`: channels,
+        supergroups, and basic groups sync; DMs are listed but not ingestable.
         """
         from telethon.tl.types import Channel, Chat, User
 
@@ -57,7 +56,7 @@ class _UserCollector:
                 typ = "channel" if getattr(e, "broadcast", False) else "supergroup"
                 supported = True
             elif isinstance(e, Chat):
-                typ, supported = "group", False
+                typ, supported = "group", True
             elif isinstance(e, User):
                 typ, supported = "dm", False
             else:
@@ -78,26 +77,32 @@ class _UserCollector:
         return out
 
     async def resolve_dialog(self, chat_id: int) -> dict:
-        """Resolve a dialog the user is a member of → {channel_id, title, username}.
+        """Resolve a dialog the user is a member of → {channel_id, title,
+        username, peer_type}.
 
         Bypasses the username/invite-link requirement: the entity is found among
-        the user's own dialogs (access_hash from the live session). Only
-        channels/supergroups are supported for now (sync uses PeerChannel)."""
-        from telethon.tl.types import Channel
+        the user's own dialogs (access_hash from the live session). Channels,
+        supergroups, and basic groups are supported; DMs are not."""
+        from telethon.tl.types import Channel, Chat
 
         async for d in self.client.iter_dialogs():
             e = d.entity
             if getattr(e, "id", None) == chat_id:
-                if not isinstance(e, Channel):
+                if isinstance(e, Channel):
+                    peer_type = "channel"
+                elif isinstance(e, Chat):
+                    peer_type = "chat"
+                else:
                     raise ValueError(
-                        "Пока поддерживаются только супергруппы/каналы. "
-                        "Обычные группы и личные диалоги — скоро."
+                        "Личные диалоги пока не поддерживаются — только группы, "
+                        "супергруппы и каналы."
                     )
                 self.last_used = time.monotonic()
                 return {
                     "channel_id": e.id,
                     "title": getattr(e, "title", "") or str(e.id),
                     "username": getattr(e, "username", "") or "",
+                    "peer_type": peer_type,
                 }
         raise ValueError(f"Чат {chat_id} не найден среди твоих диалогов")
 
@@ -133,11 +138,11 @@ class _UserCollector:
                     continue
                 if isinstance(peer, InputPeerChannel):
                     typ = "channel" if getattr(entity, "broadcast", False) else "supergroup"
-                    supported = True
+                    supported, peer_type = True, "channel"
                 elif isinstance(peer, InputPeerChat):
-                    typ, supported = "group", False
+                    typ, supported, peer_type = "group", True, "chat"
                 else:
-                    typ, supported = "dm", False
+                    typ, supported, peer_type = "dm", False, "user"
                 name = (
                     getattr(entity, "title", None)
                     or " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]))
@@ -149,6 +154,7 @@ class _UserCollector:
                     "title": name,
                     "username": getattr(entity, "username", "") or "",
                     "type": typ,
+                    "peer_type": peer_type,
                     "supported": supported,
                 })
             if peers:
