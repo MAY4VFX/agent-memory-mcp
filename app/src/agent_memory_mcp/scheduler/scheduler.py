@@ -44,6 +44,9 @@ class SyncScheduler:
         self._fetch_semaphore = asyncio.Semaphore(1)
         # Track domains currently being synced to prevent duplicate tasks
         self._syncing_domains: set = set()
+        # Owners whose chats need (re)classification after a new source's first
+        # sync — drained once per loop so a folder of N chats classifies once.
+        self._classify_pending: set = set()
 
     async def _get_collector_for_domain(self, domain: dict):
         """Get a Telethon client for a domain: global collector or user's session from pool."""
@@ -94,6 +97,20 @@ class SyncScheduler:
                     skipped=skipped,
                     in_flight=len(self._syncing_domains),
                 )
+
+                # Auto-classify owners with newly-ingested sources (clustering
+                # batch pass — debounced to once per loop). LLM call is awaited
+                # (async HTTP), so it doesn't block bot polling.
+                if self._classify_pending:
+                    owners = list(self._classify_pending)
+                    self._classify_pending.clear()
+                    from agent_memory_mcp.memory_api.service import classify_labels
+                    for owner in owners:
+                        try:
+                            res = await classify_labels(owner)
+                            log.info("auto_classify_done", owner=owner, assigned=res.get("count"))
+                        except Exception:
+                            log.warning("auto_classify_failed", owner=owner, exc_info=True)
 
                 # Check digests every minute
                 await self._check_digests()
@@ -359,6 +376,10 @@ class SyncScheduler:
             if msgs or last_msg_id > 0:
                 domain_update["last_synced_at"] = datetime.now(timezone.utc)
             await queries.update_domain(async_engine, domain_id, **domain_update)
+
+            # First successful sync of a new source → queue owner for auto-classify.
+            if msgs and not domain.get("last_synced_at"):
+                self._classify_pending.add(domain["owner_id"])
             log.info(
                 "incremental_sync_done",
                 domain_id=str(domain_id),

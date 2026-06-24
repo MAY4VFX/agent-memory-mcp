@@ -1001,6 +1001,36 @@ async def set_domain_label(
         await conn.execute(stmt)
 
 
+async def set_domain_project_label(
+    engine: AsyncEngine,
+    domain_id: UUID,
+    label_id: UUID,
+    confidence: float | None,
+    source: str | None,
+) -> None:
+    """Attach a project label to a chat, ensuring exactly ONE project per chat
+    (removes any other project-type labels on this domain first)."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            delete(domain_labels).where(
+                domain_labels.c.domain_id == domain_id,
+                domain_labels.c.label_id.in_(
+                    select(labels.c.id).where(labels.c.type == "project")
+                ),
+                domain_labels.c.label_id != label_id,
+            )
+        )
+        stmt = (
+            pg_insert(domain_labels)
+            .values(domain_id=domain_id, label_id=label_id, confidence=confidence, source=source)
+            .on_conflict_do_update(
+                index_elements=["domain_id", "label_id"],
+                set_={"confidence": confidence, "source": source, "created_at": text("now()")},
+            )
+        )
+        await conn.execute(stmt)
+
+
 async def list_labels(
     engine: AsyncEngine, owner_id: int, type_: str | None = None
 ) -> list[dict]:
