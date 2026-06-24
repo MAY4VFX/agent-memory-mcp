@@ -131,8 +131,6 @@ async def hub_add_sources(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "src:native")
 async def src_native(callback: CallbackQuery) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
     await callback.answer()
     await callback.message.answer(
         "Tap a button below and pick a chat in Telegram's native selector "
@@ -153,8 +151,6 @@ def _bare_chat_id(marked: int) -> int:
 
 @router.message(F.chat_shared)
 async def on_chat_shared(message: Message) -> None:
-    if not is_allowed_user(message.from_user.id, message.from_user.username):
-        return
     bare = _bare_chat_id(message.chat_shared.chat_id)
     await message.answer("Adding…", reply_markup=ReplyKeyboardRemove())
     res = await service.add_source(
@@ -167,8 +163,6 @@ async def on_chat_shared(message: Message) -> None:
 
 @router.callback_query(F.data == "src:bylink")
 async def src_bylink(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
     await callback.answer()
     await state.set_state(AddSourceStates.waiting_input)
     await _safe_edit(
@@ -180,8 +174,6 @@ async def src_bylink(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(AddSourceStates.waiting_input)
 async def on_source_input(message: Message, state: FSMContext) -> None:
-    if not is_allowed_user(message.from_user.id, message.from_user.username):
-        return
     await state.clear()
     lines = [l.strip() for l in (message.text or "").splitlines() if l.strip()]
     if not lines:
@@ -199,8 +191,6 @@ async def on_source_input(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "hub:folders_multi")
 async def folders_multi(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
     await callback.answer()
     folders = await _user_folders(callback.from_user.id)
     if not folders:
@@ -216,8 +206,6 @@ async def folders_multi(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("fmulti:"))
 async def folders_multi_toggle(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
     await callback.answer()
     fid = int(callback.data.split(":")[1])
     data = await state.get_data()
@@ -234,8 +222,6 @@ async def folders_multi_toggle(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.callback_query(F.data == "fmulti_go")
 async def folders_multi_go(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
     await callback.answer()
     data = await state.get_data()
     folders = {f["id"]: f for f in (data.get("fmulti_folders") or [])}
