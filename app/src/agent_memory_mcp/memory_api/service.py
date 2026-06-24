@@ -852,7 +852,7 @@ async def get_activity(
                 "project_name": lbl["name"] if lbl else None,
                 "label_confidence": lbl["confidence"] if lbl else None,
                 "task_id": None,
-                "read_at": None,
+                "read_at": r["read_at"].isoformat() if r.get("read_at") else None,
             }
         )
 
