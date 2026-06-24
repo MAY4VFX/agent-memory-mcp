@@ -26,7 +26,6 @@ from agent_memory_mcp.bot.keyboards import (
 )
 from agent_memory_mcp.bot.states import AddChannelStates, AddSourceStates, GroupStates
 from agent_memory_mcp.memory_api import service
-from agent_memory_mcp.collector.client import TelegramCollector
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db import queries_groups as gq
@@ -293,7 +292,7 @@ async def _user_folders(user_id: int) -> list[dict]:
 
 
 @router.callback_query(F.data == "hub:folders")
-async def hub_folders(callback: CallbackQuery, collector: TelegramCollector) -> None:
+async def hub_folders(callback: CallbackQuery) -> None:
     if not is_allowed_user(callback.from_user.id, callback.from_user.username):
         return
     await callback.answer()
@@ -313,14 +312,14 @@ async def hub_folders(callback: CallbackQuery, collector: TelegramCollector) -> 
 # ------------------------------------------------------------------ Folder import
 
 @router.callback_query(F.data == "groups:folders")
-async def show_folders(callback: CallbackQuery, collector: TelegramCollector) -> None:
+async def show_folders(callback: CallbackQuery) -> None:
     """Legacy callback — redirect to hub:folders."""
-    await hub_folders(callback, collector)
+    await hub_folders(callback)
 
 
 @router.callback_query(F.data.startswith("folder_import:"))
 async def import_folder(
-    callback: CallbackQuery, state: FSMContext, collector: TelegramCollector,
+    callback: CallbackQuery, state: FSMContext,
 ) -> None:
     """Store folder data in FSM and ask for sync period."""
     if not is_allowed_user(callback.from_user.id, callback.from_user.username):
