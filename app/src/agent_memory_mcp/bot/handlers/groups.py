@@ -345,15 +345,15 @@ async def import_folder(
             "peers": supported,
         }
     )
-    note = f"\u041f\u0430\u043f\u043a\u0430 \"{folder['title']}\": {len(supported)} \u0447\u0430\u0442(\u043e\u0432) \u0434\u043b\u044f \u0438\u043c\u043f\u043e\u0440\u0442\u0430"
+    note = f"Folder \"{folder['title']}\": {len(supported)} chat(s) to import"
     if skipped:
-        note += f"\n\u26a0\ufe0f \u043f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e {skipped} (\u043e\u0431\u044b\u0447\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b/\u041b\u0421 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f)"
+        note += f"\n\u26a0\ufe0f skipped {skipped} unsupported"
     if not supported:
-        await callback.message.edit_text(note + "\n\n\u0414\u043e\u0431\u0430\u0432\u043b\u044f\u0442\u044c \u043d\u0435\u0447\u0435\u0433\u043e.")
+        await callback.message.edit_text(note + "\n\nNothing to add.")
         await state.clear()
         return
     await callback.message.edit_text(
-        note + "\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043b\u0443\u0431\u0438\u043d\u0443 \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0430\u0446\u0438\u0438:",
+        note + "\n\nChoose sync depth:",
         reply_markup=period_kb(),
     )
     await state.set_state(AddChannelStates.choosing_period)

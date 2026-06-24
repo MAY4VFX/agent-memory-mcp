@@ -58,7 +58,7 @@ class _UserCollector:
             elif isinstance(e, Chat):
                 typ, supported = "group", True
             elif isinstance(e, User):
-                typ, supported = "dm", False
+                typ, supported = "dm", True
             else:
                 typ, supported = "other", False
             name = (
@@ -83,7 +83,7 @@ class _UserCollector:
         Bypasses the username/invite-link requirement: the entity is found among
         the user's own dialogs (access_hash from the live session). Channels,
         supergroups, and basic groups are supported; DMs are not."""
-        from telethon.tl.types import Channel, Chat
+        from telethon.tl.types import Channel, Chat, User
 
         async for d in self.client.iter_dialogs():
             e = d.entity
@@ -92,15 +92,19 @@ class _UserCollector:
                     peer_type = "channel"
                 elif isinstance(e, Chat):
                     peer_type = "chat"
+                elif isinstance(e, User):
+                    peer_type = "user"
                 else:
-                    raise ValueError(
-                        "Личные диалоги пока не поддерживаются — только группы, "
-                        "супергруппы и каналы."
-                    )
+                    raise ValueError("Unsupported chat type")
+                name = (
+                    getattr(e, "title", None)
+                    or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
+                    or (f"@{e.username}" if getattr(e, "username", None) else str(e.id))
+                )
                 self.last_used = time.monotonic()
                 return {
                     "channel_id": e.id,
-                    "title": getattr(e, "title", "") or str(e.id),
+                    "title": name,
                     "username": getattr(e, "username", "") or "",
                     "peer_type": peer_type,
                 }
@@ -162,7 +166,7 @@ class _UserCollector:
                 elif isinstance(peer, InputPeerChat):
                     typ, supported, peer_type = "group", True, "chat"
                 elif isinstance(peer, InputPeerUser):
-                    typ, supported, peer_type = "dm", False, "user"
+                    typ, supported, peer_type = "dm", True, "user"
                 else:
                     continue
                 peers.append({
