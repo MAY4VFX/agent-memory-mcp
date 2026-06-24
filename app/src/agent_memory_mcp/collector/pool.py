@@ -115,13 +115,35 @@ class _UserCollector:
         sync today; basic groups + DMs are listed but flagged unsupported).
         """
         from telethon.tl.functions.messages import GetDialogFiltersRequest
-        from telethon.tl.types import Channel, InputPeerChannel, InputPeerChat, InputPeerUser
+        from telethon.tl.types import InputPeerChannel, InputPeerChat, InputPeerUser
 
         try:
             result = await self.client(GetDialogFiltersRequest())
         except Exception:
             log.exception("get_dialog_filters_failed")
             return []
+
+        # Resolve titles from ONE get_dialogs() (warm cache) instead of a
+        # get_entity per peer — hundreds of MTProto calls would hang the bot and
+        # make callbacks expire ("query is too old").
+        try:
+            dialogs = await self.client.get_dialogs()
+            by_id = {getattr(d.entity, "id", None): d.entity for d in dialogs if d.entity is not None}
+        except Exception:
+            log.warning("get_folders_dialogs_failed")
+            by_id = {}
+
+        def _pid(p):
+            return getattr(p, "channel_id", None) or getattr(p, "chat_id", None) or getattr(p, "user_id", None)
+
+        def _name(e, pid):
+            if e is None:
+                return str(pid)
+            return (
+                getattr(e, "title", None)
+                or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
+                or (f"@{e.username}" if getattr(e, "username", None) else str(pid))
+            )
 
         folders: list[dict] = []
         filters = getattr(result, "filters", result) if not isinstance(result, list) else result
@@ -130,29 +152,24 @@ class _UserCollector:
                 continue
             peers: list[dict] = []
             for peer in (f.include_peers or []):
-                if not isinstance(peer, (InputPeerChannel, InputPeerChat, InputPeerUser)):
+                pid = _pid(peer)
+                if pid is None:
                     continue
-                try:
-                    entity = await self.client.get_entity(peer)
-                except Exception:
-                    continue
+                e = by_id.get(pid)
                 if isinstance(peer, InputPeerChannel):
-                    typ = "channel" if getattr(entity, "broadcast", False) else "supergroup"
+                    typ = "channel" if getattr(e, "broadcast", False) else "supergroup"
                     supported, peer_type = True, "channel"
                 elif isinstance(peer, InputPeerChat):
                     typ, supported, peer_type = "group", True, "chat"
-                else:
+                elif isinstance(peer, InputPeerUser):
                     typ, supported, peer_type = "dm", False, "user"
-                name = (
-                    getattr(entity, "title", None)
-                    or " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]))
-                    or (f"@{entity.username}" if getattr(entity, "username", None) else str(entity.id))
-                )
+                else:
+                    continue
                 peers.append({
-                    "channel_id": entity.id,  # bare id (matches domains.channel_id)
-                    "chat_id": entity.id,
-                    "title": name,
-                    "username": getattr(entity, "username", "") or "",
+                    "channel_id": pid,  # bare id (matches domains.channel_id)
+                    "chat_id": pid,
+                    "title": _name(e, pid),
+                    "username": (getattr(e, "username", "") or "") if e is not None else "",
                     "type": typ,
                     "peer_type": peer_type,
                     "supported": supported,
@@ -160,7 +177,9 @@ class _UserCollector:
             if peers:
                 title = f.title
                 if not isinstance(title, str):
-                    title = getattr(title, "text", None) or str(title)
+                    title = getattr(title, "text", None) or ""
+                if not (title or "").strip():
+                    title = f"Folder {f.id}"  # emoji-only / custom-emoji name
                 folders.append({"id": f.id, "title": title, "peers": peers})
 
         self.last_used = time.monotonic()
