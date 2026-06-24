@@ -292,9 +292,14 @@ async def _add_folder(
             "message": f"Folder '{folder_name}' not found. Available: {available}",
         }
 
-    peers = folder["peers"]
+    all_peers = folder["peers"]
+    peers = [p for p in all_peers if p.get("supported", True)]
+    unsupported = len(all_peers) - len(peers)
     if not peers:
-        return {"status": "error", "message": f"Folder '{folder['title']}' has no channels."}
+        msg = f"Folder '{folder['title']}' has no ingestable chats."
+        if unsupported:
+            msg += f" ({unsupported} basic groups/DMs not yet supported.)"
+        return {"status": "error", "message": msg}
 
     # Create a group for this folder
     group = await gq.create_group(
