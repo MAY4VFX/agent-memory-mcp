@@ -170,7 +170,7 @@ async def run_initial_ingestion(
             label_id = await _dbq.upsert_label(
                 _eng, _domain["owner_id"], "project", schema_result.project
             )
-            await _dbq.set_domain_label(
+            await _dbq.set_domain_project_label(
                 _eng, _UUID(domain_id), label_id, confidence=0.8, source="content"
             )
             log.info("project_label_set", domain_id=domain_id, project=schema_result.project)

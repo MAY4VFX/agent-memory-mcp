@@ -110,7 +110,7 @@ async def classify_owner_chats(
             conf = None
         source = a.get("source") if a.get("source") in ("title", "content") else None
         label_id = await db_q.upsert_label(async_engine, owner_id, "project", name)
-        await db_q.set_domain_label(async_engine, did, label_id, conf, source)
+        await db_q.set_domain_project_label(async_engine, did, label_id, conf, source)
         assigned.append({"domain_id": str(did), "project_name": name, "confidence": conf})
 
     log.info("label_classify_done", owner_id=owner_id, assigned=len(assigned))
