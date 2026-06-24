@@ -147,12 +147,24 @@ async def hub_manage(callback: CallbackQuery) -> None:
     )
 
 
+async def _user_folders(user_id: int) -> list[dict]:
+    """Folders from the user's OWN Telethon session (pool), not the global
+    collector — the global one has no session in multi-tenant mode."""
+    from agent_memory_mcp.collector.pool import collector_pool
+    if not collector_pool:
+        return []
+    uc = await collector_pool.get_collector(user_id)
+    if not uc:
+        return []
+    return await uc.get_folders()
+
+
 @router.callback_query(F.data == "hub:folders")
 async def hub_folders(callback: CallbackQuery, collector: TelegramCollector) -> None:
     if not is_allowed_user(callback.from_user.id, callback.from_user.username):
         return
     await callback.answer()
-    folders = await collector.get_dialog_filters()
+    folders = await _user_folders(callback.from_user.id)
     if not folders:
         await _safe_edit(
             callback.message,
@@ -183,23 +195,33 @@ async def import_folder(
     await callback.answer()
 
     folder_id = int(callback.data.split(":")[1])
-    folders = await collector.get_dialog_filters()
+    folders = await _user_folders(callback.from_user.id)
     folder = next((f for f in folders if f["id"] == folder_id), None)
     if not folder:
         await callback.message.edit_text("\u041f\u0430\u043f\u043a\u0430 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
         return
 
-    # Store folder data in FSM for later creation after period/freq
+    peers = folder["peers"]
+    supported = [p for p in peers if p.get("supported", True)]
+    skipped = len(peers) - len(supported)
+
+    # Store only ingestable peers; later creation runs after period/freq.
     await state.update_data(
         folder_import={
             "folder_id": folder_id,
             "folder_title": folder["title"],
-            "peers": folder["peers"],
+            "peers": supported,
         }
     )
+    note = f"\u041f\u0430\u043f\u043a\u0430 \"{folder['title']}\": {len(supported)} \u0447\u0430\u0442(\u043e\u0432) \u0434\u043b\u044f \u0438\u043c\u043f\u043e\u0440\u0442\u0430"
+    if skipped:
+        note += f"\n\u26a0\ufe0f \u043f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e {skipped} (\u043e\u0431\u044b\u0447\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b/\u041b\u0421 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f)"
+    if not supported:
+        await callback.message.edit_text(note + "\n\n\u0414\u043e\u0431\u0430\u0432\u043b\u044f\u0442\u044c \u043d\u0435\u0447\u0435\u0433\u043e.")
+        await state.clear()
+        return
     await callback.message.edit_text(
-        f"\U0001f4c2 \u041f\u0430\u043f\u043a\u0430 \"{folder['title']}\" ({len(folder['peers'])} \u043a\u0430\u043d\u0430\u043b\u043e\u0432)\n\n"
-        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043b\u0443\u0431\u0438\u043d\u0443 \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0430\u0446\u0438\u0438:",
+        note + "\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043b\u0443\u0431\u0438\u043d\u0443 \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0430\u0446\u0438\u0438:",
         reply_markup=period_kb(),
     )
     await state.set_state(AddChannelStates.choosing_period)
