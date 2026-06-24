@@ -101,6 +101,17 @@ async def get_activity(
         raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
 
 
+@router.get("/dialogs")
+async def list_dialogs(
+    limit: int = Query(300, ge=1, le=1000),
+    api_key: dict = Depends(verify_api_key),
+):
+    """List the user's Telegram chats (incl. member-only ones with no @username
+    or invite link). Add a supported one via POST /sources/add with
+    source_type="dialog" and handle=<chat_id>."""
+    return await service.list_dialogs(api_key["telegram_id"], limit)
+
+
 @router.get("/labels")
 async def list_labels(
     type: str | None = Query(None, description="Filter by label type, e.g. project"),
