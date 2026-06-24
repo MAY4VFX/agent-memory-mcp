@@ -222,16 +222,19 @@ async def _show_sources(target, user_id: int, edit: bool = False):
     # Standalone = pinned or not in any group
     standalone = [d for d in domains if d["id"] not in grouped_ids]
 
+    add_btn = InlineKeyboardButton(text="➕ Add Source", callback_data="src:add")
+
     if not domains and not groups:
         text_msg = (
             "📡 <b>Sources</b>\n\n"
-            "No sources connected yet.\n"
-            "Use MCP: <code>add_source(handle=\"@channel\")</code>"
+            "No sources connected yet."
         )
-        await _send_or_edit(target, text_msg, edit=edit)
+        await _send_or_edit(
+            target, text_msg, InlineKeyboardMarkup(inline_keyboard=[[add_btn]]), edit
+        )
         return
 
-    buttons = []
+    buttons = [[add_btn]]
 
     # Folder buttons
     for g in groups:
@@ -261,6 +264,18 @@ async def _show_sources(target, user_id: int, edit: bool = False):
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text_msg = f"📡 <b>Sources</b> ({len(domains)} channels)"
     await _send_or_edit(target, text_msg, kb, edit)
+
+
+@router.callback_query(F.data == "src:add")
+async def cb_source_add(callback: CallbackQuery):
+    """Open the add-source method picker (native picker / link-id / folders)."""
+    from agent_memory_mcp.bot.keyboards import add_sources_kb
+
+    await callback.answer()
+    await callback.message.edit_text(
+        "➕ <b>Add Source</b>\n\nChoose how to add:",
+        reply_markup=add_sources_kb(),
+    )
 
 
 @router.callback_query(F.data.startswith("src:folder:"))
