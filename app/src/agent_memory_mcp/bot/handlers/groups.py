@@ -135,8 +135,8 @@ async def src_native(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     await callback.message.answer(
-        "Нажмите кнопку ниже и выберите чат в нативном меню Telegram "
-        "(канал или группу):",
+        "Tap a button below and pick a chat in Telegram's native selector "
+        "(channel or group):",
         reply_markup=request_chat_kb(),
     )
 
@@ -156,11 +156,11 @@ async def on_chat_shared(message: Message) -> None:
     if not is_allowed_user(message.from_user.id, message.from_user.username):
         return
     bare = _bare_chat_id(message.chat_shared.chat_id)
-    await message.answer("Добавляю…", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Adding…", reply_markup=ReplyKeyboardRemove())
     res = await service.add_source(
         message.from_user.id, str(bare), source_type="dialog", sync_range="3m"
     )
-    await message.answer(res.get("message") or f"Статус: {res.get('status')}")
+    await message.answer(res.get("message") or f"Status: {res.get('status')}")
 
 
 # ---------------- Add by link / @username / id ----------------
@@ -173,8 +173,8 @@ async def src_bylink(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddSourceStates.waiting_input)
     await _safe_edit(
         callback.message,
-        "Пришлите ссылку, @username, инвайт-ссылку или числовой ID "
-        "(по одному на строку):",
+        "Send a link, @username, invite link, or numeric chat ID "
+        "(one per line):",
     )
 
 
@@ -185,7 +185,7 @@ async def on_source_input(message: Message, state: FSMContext) -> None:
     await state.clear()
     lines = [l.strip() for l in (message.text or "").splitlines() if l.strip()]
     if not lines:
-        await message.answer("Пусто.")
+        await message.answer("Empty.")
         return
     out = []
     for h in lines:
@@ -204,12 +204,12 @@ async def folders_multi(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     folders = await _user_folders(callback.from_user.id)
     if not folders:
-        await _safe_edit(callback.message, "Папок не найдено.")
+        await _safe_edit(callback.message, "No Telegram folders found.")
         return
     await state.update_data(fmulti_folders=folders, fmulti_selected=[])
     await _safe_edit(
         callback.message,
-        "Выберите папки для импорта (можно несколько), затем «Импортировать»:",
+        "Select folders to import (one or several), then «Import selected»:",
         reply_markup=folder_multi_kb(folders, set()),
     )
 
@@ -227,7 +227,7 @@ async def folders_multi_toggle(callback: CallbackQuery, state: FSMContext) -> No
     await state.update_data(fmulti_folders=folders, fmulti_selected=list(selected))
     await _safe_edit(
         callback.message,
-        "Выберите папки для импорта (можно несколько), затем «Импортировать»:",
+        "Select folders to import (one or several), then «Import selected»:",
         reply_markup=folder_multi_kb(folders, selected),
     )
 
@@ -242,9 +242,9 @@ async def folders_multi_go(callback: CallbackQuery, state: FSMContext) -> None:
     selected = set(data.get("fmulti_selected") or [])
     await state.clear()
     if not selected:
-        await _safe_edit(callback.message, "Ничего не выбрано.")
+        await _safe_edit(callback.message, "Nothing selected.")
         return
-    await _safe_edit(callback.message, "Импортирую выбранные папки…")
+    await _safe_edit(callback.message, "Importing selected folders…")
     out = []
     for fid in selected:
         f = folders.get(fid)
@@ -254,7 +254,7 @@ async def folders_multi_go(callback: CallbackQuery, state: FSMContext) -> None:
             callback.from_user.id, f["title"], source_type="folder", sync_range="3m"
         )
         out.append(f"📁 {f['title']}: {res.get('status')}")
-    await callback.message.answer("Готово:\n" + "\n".join(out))
+    await callback.message.answer("Done:\n" + "\n".join(out))
 
 
 @router.callback_query(F.data.in_({"hub:manage", "hub:lists"}))
