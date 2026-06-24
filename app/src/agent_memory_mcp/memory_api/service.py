@@ -176,14 +176,18 @@ async def add_source(
     if source_type == "folder":
         return await _add_folder(owner_id, uc, handle, sync_range, freq)
 
-    # --- Single channel ---
+    # --- Dialog: a chat the user is a member of (no link/admin needed) ---
+    if source_type == "dialog":
+        return await _add_single_dialog(owner_id, uc, handle, sync_range, freq)
+
+    # --- Single channel (by @username / invite link) ---
     return await _add_single_channel(owner_id, uc, handle, sync_range, freq)
 
 
 async def _add_single_channel(
     owner_id: int, uc, handle: str, sync_range: str, sync_frequency_minutes: int = 60,
 ) -> dict:
-    """Add a single channel as a source."""
+    """Add a single channel as a source (resolved by @username / invite link)."""
     try:
         info = await uc.resolve_channel(handle)
     except ValueError as e:
@@ -191,7 +195,34 @@ async def _add_single_channel(
     except Exception as e:
         log.exception("resolve_channel_failed", handle=handle, owner_id=owner_id)
         return {"status": "error", "message": f"Failed to resolve channel: {e}"}
+    return await _persist_source(owner_id, info, sync_range, sync_frequency_minutes)
 
+
+async def _add_single_dialog(
+    owner_id: int, uc, handle: str, sync_range: str, sync_frequency_minutes: int = 60,
+) -> dict:
+    """Add a chat the user is a member of, by chat_id from list_dialogs().
+
+    No @username / invite link / admin needed — resolved via the user's own
+    Telethon session."""
+    try:
+        chat_id = int(str(handle).strip())
+    except (TypeError, ValueError):
+        return {"status": "error", "message": f"Invalid chat_id: {handle!r}"}
+    try:
+        info = await uc.resolve_dialog(chat_id)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        log.exception("resolve_dialog_failed", chat_id=chat_id, owner_id=owner_id)
+        return {"status": "error", "message": f"Failed to resolve dialog: {e}"}
+    return await _persist_source(owner_id, info, sync_range, sync_frequency_minutes)
+
+
+async def _persist_source(
+    owner_id: int, info: dict, sync_range: str, sync_frequency_minutes: int = 60,
+) -> dict:
+    """Create the domain + queue first sync for an already-resolved source."""
     # Private channels have no username — fall back to title for display.
     label = f"@{info['username']}" if info.get("username") else info["title"]
 
@@ -861,6 +892,22 @@ async def get_activity(
         last = rows[-1]
         next_cursor = _encode_cursor(last["msg_date"], last["id"])
     return {"events": events, "next_cursor": next_cursor}
+
+
+async def list_dialogs(owner_id: int, limit: int = 300) -> dict:
+    """List the user's Telegram chats so they can add member-only ones by id."""
+    from agent_memory_mcp.collector.pool import collector_pool
+    from agent_memory_mcp.config import settings
+    if not collector_pool:
+        return {"status": "error", "message": "Collector pool not initialized"}
+    uc = await collector_pool.get_collector(owner_id)
+    if not uc:
+        return {
+            "status": "auth_required",
+            "message": f"Telegram не подключён. Авторизуйся через @{settings.bot_username}.",
+        }
+    dialogs = await uc.list_dialogs(limit)
+    return {"dialogs": dialogs, "count": len(dialogs)}
 
 
 async def classify_labels(owner_id: int) -> dict:
