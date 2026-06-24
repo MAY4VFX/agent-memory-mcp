@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, func, insert, select, text, update
+from sqlalchemy import and_, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -837,6 +837,60 @@ async def get_messages_since(
             messages.c.is_noise.is_(False),
         )
         .order_by(messages.c.msg_date.desc())
+        .limit(limit)
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def get_activity_events(
+    engine: AsyncEngine,
+    domain_ids: list[UUID],
+    since: "datetime",
+    until: "datetime | None" = None,
+    after_date: "datetime | None" = None,
+    after_id: "UUID | None" = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """Raw message metadata across domains, oldest-first, keyset-paginated.
+
+    Powers the cross-source workload resolver's incremental drain of
+    communication activity. Returns metadata only — message ``content`` is never
+    selected here, only its length. Keyset cursor is ``(msg_date, id)`` so a
+    caller can page forward without offset drift as new messages arrive.
+    """
+    if not domain_ids:
+        return []
+    conds = [
+        messages.c.domain_id.in_(domain_ids),
+        messages.c.msg_date >= since,
+        messages.c.is_noise.is_(False),
+    ]
+    if until is not None:
+        conds.append(messages.c.msg_date < until)
+    if after_date is not None and after_id is not None:
+        conds.append(
+            or_(
+                messages.c.msg_date > after_date,
+                and_(messages.c.msg_date == after_date, messages.c.id > after_id),
+            )
+        )
+    stmt = (
+        select(
+            messages.c.id,
+            messages.c.domain_id,
+            messages.c.telegram_msg_id,
+            messages.c.reply_to_msg_id,
+            messages.c.topic_id,
+            messages.c.thread_id,
+            messages.c.sender_id,
+            messages.c.content_type,
+            func.length(messages.c.content).label("char_len"),
+            messages.c.msg_date,
+        )
+        .where(*conds)
+        .order_by(messages.c.msg_date.asc(), messages.c.id.asc())
         .limit(limit)
     )
     async with engine.begin() as conn:

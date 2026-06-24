@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from fastapi import HTTPException
 from agent_memory_mcp.memory_api import schemas as S
@@ -60,6 +60,45 @@ async def list_scopes(api_key: dict = Depends(verify_api_key)):
                 "message_count": d.get("message_count", 0),
             })
     return {"scopes": scopes, "count": len(scopes)}
+
+
+def _parse_iso(value: str) -> "datetime":
+    from datetime import datetime
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+@router.get("/activity")
+async def get_activity(
+    since: str = Query(..., description="ISO8601 start, inclusive"),
+    until: str | None = Query(None, description="ISO8601 end, exclusive"),
+    scope: str | None = Query(None, description="all | @channel | folder:Name | domain UUID"),
+    cursor: str | None = Query(None, description="Opaque pagination cursor from a prior call"),
+    limit: int = Query(1000, ge=1, le=5000),
+    api_key: dict = Depends(verify_api_key),  # Free — raw metadata export, no LLM cost
+):
+    """Raw communication-activity events (metadata only, no message content) for
+    the cross-source workload resolver. Oldest-first, cursor-paginated.
+
+    Each event carries timing, direction, length, chat, and reply identifiers.
+    The ``read_at`` / ``project_id`` / ``task_id`` fields are reserved (always
+    null today) and filled once the read-listener and label classifier land.
+    """
+    try:
+        since_dt = _parse_iso(since)
+        until_dt = _parse_iso(until) if until else None
+    except ValueError:
+        raise HTTPException(422, "since/until must be ISO8601 datetimes")
+    try:
+        return await service.get_activity(
+            owner_id=api_key["telegram_id"],
+            since=since_dt,
+            until=until_dt,
+            scope=scope,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ScopeNotFound as e:
+        raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
 
 
 @router.get("/account/balance")
