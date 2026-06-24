@@ -101,6 +101,22 @@ async def get_activity(
         raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
 
 
+@router.get("/labels")
+async def list_labels(
+    type: str | None = Query(None, description="Filter by label type, e.g. project"),
+    api_key: dict = Depends(verify_api_key),
+):
+    """List the owner's labels (project/task/…)."""
+    return await service.list_labels(api_key["telegram_id"], type)
+
+
+@router.post("/labels/classify")
+async def classify_labels(api_key: dict = Depends(verify_api_key)):
+    """Cluster the owner's chats into project labels (one LLM pass) and persist
+    them. Free for now — a single batched call; revisit if abused."""
+    return await service.classify_labels(api_key["telegram_id"])
+
+
 @router.get("/account/balance")
 async def get_balance(api_key: dict = Depends(verify_api_key)):
     from sqlalchemy import text

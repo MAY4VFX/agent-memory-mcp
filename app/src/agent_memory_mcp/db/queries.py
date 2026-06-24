@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_memory_mcp.db.tables import (
     channel_schemas,
+    domain_labels,
     domains,
     hashtag_summaries,
+    labels,
     messages,
     sync_jobs,
     telegram_sessions,
@@ -896,6 +898,104 @@ async def get_activity_events(
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Labels (cross-source workload attribution)
+# ---------------------------------------------------------------------------
+
+async def upsert_label(
+    engine: AsyncEngine,
+    owner_id: int,
+    type_: str,
+    name: str,
+    aliases: list[str] | None = None,
+) -> UUID:
+    """Create or fetch a label by (owner, type, name). Merges aliases. Returns id."""
+    ins = pg_insert(labels).values(
+        owner_id=owner_id, type=type_, name=name, aliases=aliases
+    )
+    stmt = ins.on_conflict_do_update(
+        index_elements=["owner_id", "type", "name"],
+        set_={"aliases": ins.excluded.aliases},
+    ).returning(labels.c.id)
+    async with engine.begin() as conn:
+        return (await conn.execute(stmt)).scalar_one()
+
+
+async def set_domain_label(
+    engine: AsyncEngine,
+    domain_id: UUID,
+    label_id: UUID,
+    confidence: float | None,
+    source: str | None,
+) -> None:
+    """Attach (or refresh) a label on a chat/domain."""
+    stmt = (
+        pg_insert(domain_labels)
+        .values(
+            domain_id=domain_id,
+            label_id=label_id,
+            confidence=confidence,
+            source=source,
+        )
+        .on_conflict_do_update(
+            index_elements=["domain_id", "label_id"],
+            set_={
+                "confidence": confidence,
+                "source": source,
+                "created_at": text("now()"),
+            },
+        )
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
+
+
+async def list_labels(
+    engine: AsyncEngine, owner_id: int, type_: str | None = None
+) -> list[dict]:
+    stmt = select(labels).where(labels.c.owner_id == owner_id)
+    if type_:
+        stmt = stmt.where(labels.c.type == type_)
+    stmt = stmt.order_by(labels.c.type, labels.c.name)
+    async with engine.begin() as conn:
+        return [dict(r) for r in (await conn.execute(stmt)).mappings().all()]
+
+
+async def get_domain_label_map(
+    engine: AsyncEngine, domain_ids: list[UUID], type_: str = "project"
+) -> dict:
+    """domain_id → {label_id, name, confidence} for the given label type, picking
+    the highest-confidence label per domain. Used to stamp project_id on the
+    /activity export."""
+    if not domain_ids:
+        return {}
+    stmt = (
+        select(
+            domain_labels.c.domain_id,
+            domain_labels.c.label_id,
+            domain_labels.c.confidence,
+            labels.c.name,
+        )
+        .select_from(domain_labels.join(labels, domain_labels.c.label_id == labels.c.id))
+        .where(
+            domain_labels.c.domain_id.in_(domain_ids),
+            labels.c.type == type_,
+        )
+        .order_by(domain_labels.c.confidence.desc().nullslast())
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+    out: dict = {}
+    for r in rows:  # first row per domain wins (highest confidence)
+        if r["domain_id"] not in out:
+            out[r["domain_id"]] = {
+                "label_id": str(r["label_id"]),
+                "name": r["name"],
+                "confidence": r["confidence"],
+            }
+    return out
 
 
 # ---------------------------------------------------------------------------
