@@ -240,6 +240,7 @@ class SyncScheduler:
                     since_date=since_date,
                     channel_username=domain.get("channel_username"),
                     use_takeout=needs_takeout,
+                    peer_type=domain.get("peer_type") or "channel",
                 )
                 if not msgs and min_id == 0 and since_date is not None:
                     log.info(
@@ -252,6 +253,7 @@ class SyncScheduler:
                         min_id=0,
                         channel_username=domain.get("channel_username"),
                         use_takeout=needs_takeout,
+                        peer_type=domain.get("peer_type") or "channel",
                     )
 
             await queries.update_sync_job(

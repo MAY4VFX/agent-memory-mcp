@@ -248,6 +248,7 @@ async def _persist_source(
         emoji="📡",
         display_name=info["title"],
         pinned=True,
+        peer_type=info.get("peer_type", "channel"),
     )
     await db_q.update_domain(
         async_engine, domain["id"],
@@ -337,6 +338,7 @@ async def _add_folder(
             emoji="📁",
             display_name=peer["title"],
             pinned=False,
+            peer_type=peer.get("peer_type", "channel"),
         )
         await db_q.update_domain(
             async_engine, domain["id"],
