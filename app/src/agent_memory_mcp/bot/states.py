@@ -26,3 +26,7 @@ class GroupStates(StatesGroup):
 class DigestStates(StatesGroup):
     choosing_hour = State()
     choosing_scope = State()
+
+
+class AddSourceStates(StatesGroup):
+    waiting_input = State()  # link / @username / chat id, resolved via the pool
