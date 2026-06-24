@@ -102,9 +102,15 @@ class _UserCollector:
         raise ValueError(f"Чат {chat_id} не найден среди твоих диалогов")
 
     async def get_folders(self) -> list[dict]:
-        """Get user's Telegram folders with channels."""
+        """Get the user's Telegram folders with ALL their dialogs.
+
+        Read directly from the user's own session (GetDialogFilters) — no folder
+        sharing / chatlist invite needed, so chats the user can't share still
+        show up. Each peer carries `type` + `supported` (only channels/supergroups
+        sync today; basic groups + DMs are listed but flagged unsupported).
+        """
         from telethon.tl.functions.messages import GetDialogFiltersRequest
-        from telethon.tl.types import InputPeerChannel
+        from telethon.tl.types import Channel, InputPeerChannel, InputPeerChat, InputPeerUser
 
         try:
             result = await self.client(GetDialogFiltersRequest())
@@ -119,16 +125,32 @@ class _UserCollector:
                 continue
             peers: list[dict] = []
             for peer in (f.include_peers or []):
+                if not isinstance(peer, (InputPeerChannel, InputPeerChat, InputPeerUser)):
+                    continue
+                try:
+                    entity = await self.client.get_entity(peer)
+                except Exception:
+                    continue
                 if isinstance(peer, InputPeerChannel):
-                    try:
-                        entity = await self.client.get_entity(peer)
-                        peers.append({
-                            "channel_id": entity.id,
-                            "title": getattr(entity, "title", ""),
-                            "username": getattr(entity, "username", "") or "",
-                        })
-                    except Exception:
-                        pass
+                    typ = "channel" if getattr(entity, "broadcast", False) else "supergroup"
+                    supported = True
+                elif isinstance(peer, InputPeerChat):
+                    typ, supported = "group", False
+                else:
+                    typ, supported = "dm", False
+                name = (
+                    getattr(entity, "title", None)
+                    or " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]))
+                    or (f"@{entity.username}" if getattr(entity, "username", None) else str(entity.id))
+                )
+                peers.append({
+                    "channel_id": entity.id,  # bare id (matches domains.channel_id)
+                    "chat_id": entity.id,
+                    "title": name,
+                    "username": getattr(entity, "username", "") or "",
+                    "type": typ,
+                    "supported": supported,
+                })
             if peers:
                 title = f.title
                 if not isinstance(title, str):
