@@ -819,6 +819,9 @@ async def get_activity(
         for d in domains_list
     }
 
+    # Chat → project label (highest-confidence per domain), stamped per event.
+    label_map = await db_q.get_domain_label_map(async_engine, domain_ids, "project")
+
     after_date, after_id = _decode_cursor(cursor)
     rows = await db_q.get_activity_events(
         async_engine, domain_ids, since, until, after_date, after_id, limit
@@ -827,6 +830,7 @@ async def get_activity(
     events = []
     for r in rows:
         meta = dmap.get(r["domain_id"], {})
+        lbl = label_map.get(r["domain_id"])
         sender_id = r.get("sender_id")
         events.append(
             {
@@ -842,11 +846,13 @@ async def get_activity(
                 "topic_id": r.get("topic_id"),
                 "thread_id": str(r["thread_id"]) if r.get("thread_id") else None,
                 "telegram_msg_id": r.get("telegram_msg_id"),
-                # Reserved — filled by A3 (read listener) and A2 (label classifier):
-                "read_at": None,
-                "project_id": None,
+                # Project label from the chat classifier (A2). task-level (A2
+                # follow-up) and read_at (A3 read listener) stay null for now.
+                "project_id": lbl["label_id"] if lbl else None,
+                "project_name": lbl["name"] if lbl else None,
+                "label_confidence": lbl["confidence"] if lbl else None,
                 "task_id": None,
-                "label_confidence": None,
+                "read_at": None,
             }
         )
 
@@ -855,6 +861,27 @@ async def get_activity(
         last = rows[-1]
         next_cursor = _encode_cursor(last["msg_date"], last["id"])
     return {"events": events, "next_cursor": next_cursor}
+
+
+async def classify_labels(owner_id: int) -> dict:
+    """Run the chat→project classifier for the owner and persist labels."""
+    from agent_memory_mcp.pipeline.label_classifier import classify_owner_chats
+    return await classify_owner_chats(owner_id)
+
+
+async def list_labels(owner_id: int, type_: str | None = None) -> dict:
+    """List the owner's labels (optionally filtered by type)."""
+    rows = await db_q.list_labels(async_engine, owner_id, type_)
+    labels = [
+        {
+            "id": str(r["id"]),
+            "type": r["type"],
+            "name": r["name"],
+            "aliases": r.get("aliases"),
+        }
+        for r in rows
+    ]
+    return {"labels": labels, "count": len(labels)}
 
 
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
