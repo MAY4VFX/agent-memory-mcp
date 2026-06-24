@@ -101,6 +101,15 @@ async def get_activity(
         raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
 
 
+@router.get("/folders")
+async def list_folders(api_key: dict = Depends(verify_api_key)):
+    """List the user's Telegram folders with their dialogs (type + supported),
+    read directly from the user's session — no folder sharing needed. Import one
+    via POST /sources/add {handle:"<folder title>", source_type:"folder"}."""
+    folders = await service.list_folders(api_key["telegram_id"])
+    return {"folders": folders, "count": len(folders)}
+
+
 @router.get("/dialogs")
 async def list_dialogs(
     limit: int = Query(300, ge=1, le=1000),
