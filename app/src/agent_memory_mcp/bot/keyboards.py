@@ -265,10 +265,13 @@ def folder_multi_kb(folders: list[dict], selected: set) -> InlineKeyboardMarkup:
     """Multi-select folder list: tap to toggle, then import all selected."""
     buttons = []
     for f in folders:
-        sup = sum(1 for p in f.get("peers", []) if p.get("supported", True))
+        sup_peers = [p for p in f.get("peers", []) if p.get("supported", True)]
         check = "\u2705" if f["id"] in selected else "\u2b1c"
-        label = f"{check} \U0001f4c1 {f['title']} ({sup})"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"fmulti:{f['id']}")])
+        hint = ", ".join(p.get("title", "") for p in sup_peers[:2])
+        label = f"{check} \U0001f4c1 {f['title']} ({len(sup_peers)})"
+        if hint:
+            label = f"{label}: {hint}"
+        buttons.append([InlineKeyboardButton(text=label[:62], callback_data=f"fmulti:{f['id']}")])
     if selected:
         buttons.append([InlineKeyboardButton(
             text=f"\u2705 Import selected ({len(selected)})",
