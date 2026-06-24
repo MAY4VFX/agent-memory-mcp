@@ -133,6 +133,7 @@ messages = Table(
     Column("hashtags", JSONB),
     Column("content_tsv", TSVECTOR, nullable=True),
     Column("is_noise", Boolean, server_default="false"),
+    Column("read_at", DateTime(timezone=True)),  # when the owner read it (live listener)
     Column("msg_date", DateTime(timezone=True), nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("domain_id", "telegram_msg_id"),

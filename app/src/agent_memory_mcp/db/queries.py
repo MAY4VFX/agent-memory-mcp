@@ -890,6 +890,7 @@ async def get_activity_events(
             messages.c.content_type,
             func.length(messages.c.content).label("char_len"),
             messages.c.msg_date,
+            messages.c.read_at,
         )
         .where(*conds)
         .order_by(messages.c.msg_date.asc(), messages.c.id.asc())
@@ -898,6 +899,52 @@ async def get_activity_events(
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Read receipts (live listener → workload time model)
+# ---------------------------------------------------------------------------
+
+async def list_active_telegram_sessions(engine: AsyncEngine) -> list[int]:
+    """telegram_ids with an active stored session — candidates for a read listener."""
+    stmt = select(telegram_sessions.c.telegram_id).where(
+        telegram_sessions.c.is_active.is_(True)
+    )
+    async with engine.begin() as conn:
+        return [r[0] for r in (await conn.execute(stmt)).all()]
+
+
+async def stamp_read_until(
+    engine: AsyncEngine,
+    owner_id: int,
+    channel_id: int,
+    max_msg_id: int,
+    read_at: "datetime",
+) -> int:
+    """Stamp read_at on inbound messages of a chat up to max_msg_id.
+
+    Only fills NULL read_at (first read wins) and skips the owner's own outbound
+    messages. Returns the number of rows stamped.
+    """
+    stmt = (
+        update(messages)
+        .where(
+            messages.c.read_at.is_(None),
+            messages.c.telegram_msg_id <= max_msg_id,
+            messages.c.sender_id.isnot(None),
+            messages.c.sender_id != owner_id,
+            messages.c.domain_id.in_(
+                select(domains.c.id).where(
+                    domains.c.owner_id == owner_id,
+                    domains.c.channel_id == channel_id,
+                )
+            ),
+        )
+        .values(read_at=read_at)
+    )
+    async with engine.begin() as conn:
+        result = await conn.execute(stmt)
+        return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------
