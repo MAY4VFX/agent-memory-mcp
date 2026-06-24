@@ -33,6 +33,12 @@ _SYSTEM = """Ты классифицируешь рабочие чаты пол�
 - Нерабочий/личный → is_work=false, label = короткая осмысленная категория
   (имя человека для ЛС, тема для канала, или "Личное"). Тоже НЕ пусто.
 
+КОСВЕННЫЙ ПРИЗНАК для личных диалогов (ЛС): если указано, что собеседник также
+участвует в рабочих групповых чатах какого-то проекта — это рабочий контакт, и
+ЛС с ним почти наверняка РАБОЧИЙ и относится к ТОМУ ЖЕ проекту (is_work=true,
+label = тот же проект). Используй это вместо того, чтобы по умолчанию считать
+1:1 диалоги личными.
+
 Верни строго JSON:
 {"assignments": [
   {"domain_id": "<id>", "label": "<непусто>", "is_work": true|false,
@@ -63,6 +69,15 @@ async def classify_owner_chats(
     if not domains:
         return {"assigned": [], "count": 0}
 
+    # Cross-reference: which domains each person (sender_id) is active in. A DM's
+    # partner has user id == the DM domain's channel_id; if that id also sends in
+    # a group chat, the DM is a work contact for that chat's project.
+    from collections import defaultdict
+    domain_by_id = {d["id"]: d for d in domains}
+    sender_domains: dict = defaultdict(set)
+    for sid, did in await db_q.get_sender_domains(async_engine, list(domain_by_id)):
+        sender_domains[sid].add(did)
+
     # Build the prompt: title + a few short recent snippets per chat.
     blocks = []
     for d in domains:
@@ -75,7 +90,14 @@ async def classify_owner_chats(
             if (m.get("content") or "").strip()
         ]
         snip_text = " | ".join(snips) if snips else "(нет текстовых сообщений)"
-        blocks.append(f'domain_id: {d["id"]}\nназвание: {_title(d)}\nпримеры: {snip_text}')
+        block = f'domain_id: {d["id"]}\nназвание: {_title(d)}\nпримеры: {snip_text}'
+        # Indirect signal for DMs: where else this person participates.
+        if d.get("peer_type") == "user":
+            co = sender_domains.get(d.get("channel_id"), set()) - {d["id"]}
+            co_names = [_title(domain_by_id[x]) for x in co if x in domain_by_id]
+            if co_names:
+                block += "\nсобеседник также пишет в: " + ", ".join(co_names[:6])
+        blocks.append(block)
     user_msg = "Чаты:\n\n" + "\n\n".join(blocks)
 
     assignments: list[dict] = []
