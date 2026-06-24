@@ -299,18 +299,25 @@ async def _add_folder(
     if not peers:
         msg = f"Folder '{folder['title']}' has no ingestable chats."
         if unsupported:
-            msg += f" ({unsupported} basic groups/DMs not yet supported.)"
+            msg += f" ({unsupported} unsupported.)"
         return {"status": "error", "message": msg}
 
-    # Create a group for this folder
-    group = await gq.create_group(
-        async_engine,
-        owner_id=owner_id,
-        name=folder["title"],
-        emoji="📁",
-        tg_folder_id=folder["id"],
-        sync_depth=sync_range,
-    )
+    # Reuse the existing group for this TG folder if it was imported before, so a
+    # re-import just adds the newly-added chats instead of duplicating the group.
+    group = None
+    for g in await gq.list_groups(async_engine, owner_id):
+        if g.get("tg_folder_id") == folder["id"]:
+            group = g
+            break
+    if group is None:
+        group = await gq.create_group(
+            async_engine,
+            owner_id=owner_id,
+            name=folder["title"],
+            emoji="📁",
+            tg_folder_id=folder["id"],
+            sync_depth=sync_range,
+        )
 
     # Add each channel
     existing = await db_q.list_domains(async_engine, owner_id)

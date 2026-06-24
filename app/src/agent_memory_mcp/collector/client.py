@@ -203,6 +203,15 @@ class TelegramCollector:
             except (ValueError, Exception):
                 await self._client.get_dialogs()
                 entity = await self._client.get_entity(PeerChat(channel_id))
+        elif peer_type == "user":
+            # Private 1:1 dialog: PeerUser needs access_hash from the session
+            # cache; refresh dialogs and retry once on a cold cache.
+            from telethon.tl.types import PeerUser
+            try:
+                entity = await self._client.get_entity(PeerUser(channel_id))
+            except (ValueError, Exception):
+                await self._client.get_dialogs()
+                entity = await self._client.get_entity(PeerUser(channel_id))
         else:
             # Channel/supergroup: PeerChannel first (fast, uses session cache),
             # fall back to username, else refresh dialogs and retry.
