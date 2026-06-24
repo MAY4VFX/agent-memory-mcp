@@ -874,8 +874,8 @@ async def get_activity(
         for d in domains_list
     }
 
-    # Chat → project label (highest-confidence per domain), stamped per event.
-    label_map = await db_q.get_domain_label_map(async_engine, domain_ids, "project")
+    # Chat → classification label (work project or personal category), per event.
+    label_map = await db_q.get_domain_label_map(async_engine, domain_ids)
 
     after_date, after_id = _decode_cursor(cursor)
     rows = await db_q.get_activity_events(
@@ -901,10 +901,12 @@ async def get_activity(
                 "topic_id": r.get("topic_id"),
                 "thread_id": str(r["thread_id"]) if r.get("thread_id") else None,
                 "telegram_msg_id": r.get("telegram_msg_id"),
-                # Project label from the chat classifier (A2). task-level (A2
-                # follow-up) and read_at (A3 read listener) stay null for now.
-                "project_id": lbl["label_id"] if lbl else None,
-                "project_name": lbl["name"] if lbl else None,
+                # Classification from the chat classifier: every chat is labelled
+                # either as a work project (is_work) or a personal category.
+                "is_work": (lbl["type"] == "project") if lbl else None,
+                "project_id": lbl["label_id"] if lbl and lbl["type"] == "project" else None,
+                "project_name": lbl["name"] if lbl and lbl["type"] == "project" else None,
+                "category": lbl["name"] if lbl and lbl["type"] != "project" else None,
                 "label_confidence": lbl["confidence"] if lbl else None,
                 "task_id": None,
                 "read_at": r["read_at"].isoformat() if r.get("read_at") else None,
