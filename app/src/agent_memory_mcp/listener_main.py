@@ -13,6 +13,7 @@ UpdateReadChannelInbox and stamps messages.read_at (see collector.read_listener
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import structlog
 from telethon import TelegramClient
@@ -22,9 +23,12 @@ from agent_memory_mcp.collector.encryption import decrypt_session
 from agent_memory_mcp.collector.read_listener import attach
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.db import queries as db_q
+from agent_memory_mcp.db import queries_groups as gq
 from agent_memory_mcp.db.engine import async_engine
 
 log = structlog.get_logger(__name__)
+
+_RESYNC_INTERVAL = 1800  # re-read folder membership every 30 min
 
 
 def _proxy():
@@ -62,7 +66,11 @@ async def _run_for_user(telegram_id: int) -> None:
             return
         attach(client, telegram_id)
         log.info("listener_user_connected", telegram_id=telegram_id)
-        await client.run_until_disconnected()
+        resync = asyncio.create_task(_folder_resync_loop(client, telegram_id))
+        try:
+            await client.run_until_disconnected()
+        finally:
+            resync.cancel()
     except Exception:
         log.warning("listener_user_loop_failed", telegram_id=telegram_id, exc_info=True)
     finally:
@@ -70,6 +78,63 @@ async def _run_for_user(telegram_id: int) -> None:
             await client.disconnect()
         except Exception:
             pass
+
+
+async def _folder_resync_loop(client, telegram_id: int) -> None:
+    """Periodically re-read the user's TG folders and add chats newly added to an
+    already-imported folder (membership isn't static after the first import)."""
+    from agent_memory_mcp.collector.pool import _UserCollector
+
+    uc = _UserCollector(telegram_id, client)
+    await asyncio.sleep(60)  # let the connection settle first
+    while True:
+        try:
+            await _resync_folders(uc, telegram_id)
+        except Exception:
+            log.warning("folder_resync_failed", telegram_id=telegram_id, exc_info=True)
+        await asyncio.sleep(_RESYNC_INTERVAL)
+
+
+async def _resync_folders(uc, telegram_id: int) -> None:
+    folders = {f["id"]: f for f in await uc.get_folders()}
+    groups = await gq.list_groups(async_engine, telegram_id)
+    domains = await db_q.list_domains(async_engine, telegram_id)
+    cid_to_did = {d["channel_id"]: d["id"] for d in domains}
+    added = 0
+    for g in groups:
+        fid = g.get("tg_folder_id")
+        folder = folders.get(fid) if fid is not None else None
+        if not folder:
+            continue
+        members = set(await gq.get_group_domain_ids(async_engine, g["id"]))
+        for p in folder["peers"]:
+            if not p.get("supported"):
+                continue
+            cid = p["channel_id"]
+            did = cid_to_did.get(cid)
+            if did is None:
+                dom = await db_q.create_domain(
+                    async_engine,
+                    owner_id=telegram_id,
+                    channel_id=cid,
+                    channel_username=p.get("username", ""),
+                    channel_name=p["title"],
+                    sync_depth=g.get("sync_depth") or "3m",
+                    sync_frequency_minutes=60,
+                    emoji="📁",
+                    display_name=p["title"],
+                    pinned=False,
+                    peer_type=p.get("peer_type", "channel"),
+                )
+                did = dom["id"]
+                cid_to_did[cid] = did
+                await db_q.update_domain(async_engine, did, next_sync_at=datetime.now(timezone.utc))
+                added += 1
+            if did not in members:
+                await gq.add_domains_to_group(async_engine, g["id"], [did])
+                members.add(did)
+    if added:
+        log.info("folder_resync_added", telegram_id=telegram_id, added=added)
 
 
 async def main() -> None:
