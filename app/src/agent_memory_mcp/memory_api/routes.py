@@ -18,6 +18,20 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 
+def _resolve_owner(api_key: dict, tg_id: int | None) -> int:
+    """Whose data to read. Defaults to the key's own owner; an ADMIN key may
+    target another user via ?tg_id=X (model B — per-user access for the workload
+    resolver, which holds the admin key). Non-admin keys requesting another
+    tg_id get 403."""
+    from agent_memory_mcp.config import settings
+    owner = api_key["telegram_id"]
+    if tg_id is not None and tg_id != owner:
+        if owner != settings.admin_telegram_id:
+            raise HTTPException(403, "tg_id override requires an admin key")
+        return tg_id
+    return owner
+
+
 # --- Free endpoints ---
 
 @router.get("/health", response_model=S.HealthResponse)
@@ -72,6 +86,7 @@ async def get_activity(
     since: str = Query(..., description="ISO8601 start, inclusive"),
     until: str | None = Query(None, description="ISO8601 end, exclusive"),
     scope: str | None = Query(None, description="all | @channel | folder:Name | domain UUID"),
+    tg_id: int | None = Query(None, description="Admin only: read this user's activity"),
     cursor: str | None = Query(None, description="Opaque pagination cursor from a prior call"),
     limit: int = Query(1000, ge=1, le=5000),
     api_key: dict = Depends(verify_api_key),  # Free — raw metadata export, no LLM cost
@@ -90,7 +105,7 @@ async def get_activity(
         raise HTTPException(422, "since/until must be ISO8601 datetimes")
     try:
         return await service.get_activity(
-            owner_id=api_key["telegram_id"],
+            owner_id=_resolve_owner(api_key, tg_id),
             since=since_dt,
             until=until_dt,
             scope=scope,
@@ -124,10 +139,24 @@ async def list_dialogs(
 @router.get("/labels")
 async def list_labels(
     type: str | None = Query(None, description="Filter by label type, e.g. project"),
+    tg_id: int | None = Query(None, description="Admin only: read this user's labels"),
     api_key: dict = Depends(verify_api_key),
 ):
     """List the owner's labels (project/task/…)."""
-    return await service.list_labels(api_key["telegram_id"], type)
+    return await service.list_labels(_resolve_owner(api_key, tg_id), type)
+
+
+@router.get("/admin/users")
+async def admin_list_users(api_key: dict = Depends(verify_api_key)):
+    """Admin only: list users with an active Telegram session, so the workload
+    resolver knows which tg_ids to fetch per-user activity for."""
+    from agent_memory_mcp.config import settings
+    if api_key["telegram_id"] != settings.admin_telegram_id:
+        raise HTTPException(403, "admin only")
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db.engine import async_engine
+    tg_ids = await db_q.list_active_telegram_sessions(async_engine)
+    return {"users": [{"telegram_id": t} for t in tg_ids]}
 
 
 @router.post("/labels/classify")
