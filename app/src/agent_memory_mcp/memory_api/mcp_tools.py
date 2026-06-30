@@ -31,14 +31,18 @@ mcp = FastMCP(
         "TWO MODES OF USE:\n"
         "1. HIGH-LEVEL (one call, AI-generated answer): search_memory, get_digest, get_decisions\n"
         "2. LOW-LEVEL (raw data, you control the strategy):\n"
+        "   - fetch_messages: bulk RAW messages by author/topic/time, paginated (no LLM)\n"
+        "   - list_topics: discover supergroup forum topics (topic_id) to filter by\n"
         "   - keyword_search: BM25 full-text, exact terms/names/hashtags\n"
         "   - vector_search: semantic similarity by meaning\n"
         "   - graph_query: knowledge graph in natural language (entities, relationships)\n"
         "   - read_messages: full text by message IDs (after search)\n"
         "   - get_schema: entity/relation types in the graph\n\n"
-        "STRATEGY: For simple questions use search_memory. For precise control, "
-        "combine keyword_search + vector_search, then read_messages for full text. "
-        "Use graph_query for 'who/what is connected to X' questions.\n\n"
+        "STRATEGY: For simple questions use search_memory. To pull EVERYTHING a "
+        "person wrote or a whole topic, use fetch_messages (page via next_cursor) — "
+        "do NOT use get_digest/get_agent_context for bulk retrieval. For precise "
+        "control, combine keyword_search + vector_search, then read_messages for "
+        "full text. Use graph_query for 'who/what is connected to X' questions.\n\n"
         "SCOPING: Most tools accept a 'scope' parameter. Call list_scopes FIRST to discover "
         "valid values: \"all\" for everything, \"folder:Name\" for channel groups, \"@username\" "
         "for individual channels.\n\n"
@@ -459,7 +463,7 @@ async def _get_channel_ids(owner_id: int, scope: str | None) -> list[int]:
 
 
 @mcp.tool()
-async def keyword_search(query: str, scope: str | None = None, limit: int = 50, since: str | None = None, ctx: Context = None) -> str:
+async def keyword_search(query: str, scope: str | None = None, limit: int = 50, since: str | None = None, topic_id: int | None = None, ctx: Context = None) -> str:
     """BM25 full-text search over messages. Best for exact terms, names, hashtags.
 
     Uses ParadeDB BM25 index with Russian stemming. Falls back to tsvector, then ILIKE.
@@ -470,6 +474,7 @@ async def keyword_search(query: str, scope: str | None = None, limit: int = 50, 
         scope: "@channel", "folder:Name", or omit for all sources.
         limit: Max results (default 50).
         since: Time filter: "2d", "1w", "1m", "2026-03-23". Only messages after this date.
+        topic_id: Restrict to one supergroup forum topic (see list_topics). Omit for all topics.
 
     Returns:
         List of matching messages with BM25 scores, dates, and channel info.
@@ -482,7 +487,7 @@ async def keyword_search(query: str, scope: str | None = None, limit: int = 50, 
     since_dt = service._parse_since(since)
 
     from agent_memory_mcp.db.queries import search_messages_bm25_multi
-    rows, total = await search_messages_bm25_multi(async_engine, domain_ids, query, limit=limit)
+    rows, total = await search_messages_bm25_multi(async_engine, domain_ids, query, limit=limit, topic_id=topic_id)
 
     # Filter by date if specified
     if since_dt:
@@ -496,6 +501,7 @@ async def keyword_search(query: str, scope: str | None = None, limit: int = 50, 
             "score": round(r.get("bm25_score", 0), 3),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "channel_id": r.get("channel_id"),
+            "topic_id": r.get("topic_id"),
             "sender": r.get("sender_name"),
         }
         for r in rows[:limit]
@@ -505,7 +511,7 @@ async def keyword_search(query: str, scope: str | None = None, limit: int = 50, 
 
 
 @mcp.tool()
-async def vector_search(query: str, scope: str | None = None, limit: int = 30, since: str | None = None, ctx: Context = None) -> str:
+async def vector_search(query: str, scope: str | None = None, limit: int = 30, since: str | None = None, topic_id: int | None = None, ctx: Context = None) -> str:
     """Semantic vector search. Finds relevant content by meaning, not just keywords.
 
     Uses BGE-M3 embeddings (1024-dim) with Milvus hybrid search (dense + sparse BM25).
@@ -516,6 +522,7 @@ async def vector_search(query: str, scope: str | None = None, limit: int = 30, s
         scope: "@channel", "folder:Name", or omit for all sources.
         limit: Max results (default 30).
         since: Time filter: "2d", "1w", "1m", "2026-03-23".
+        topic_id: Restrict to one supergroup forum topic (see list_topics). Omit for all topics.
 
     Returns:
         List of semantically similar messages with similarity scores.
@@ -527,6 +534,10 @@ async def vector_search(query: str, scope: str | None = None, limit: int = 30, s
 
     from agent_memory_mcp.storage.milvus_client import MilvusStorage
     from agent_memory_mcp.storage.embedding_client import EmbeddingClient
+
+    # Milvus does not store the forum topic_id, so when filtering by topic we
+    # over-fetch and post-filter against Postgres rather than reindex the vectors.
+    fetch_limit = min(limit * 5, 200) if topic_id is not None else limit
 
     embedder = EmbeddingClient()
     milvus = MilvusStorage()
@@ -540,13 +551,24 @@ async def vector_search(query: str, scope: str | None = None, limit: int = 30, s
                 dense, channel_ids,
                 date_from=int(since_dt.timestamp()),
                 date_to=int(datetime.now(timezone.utc).timestamp()),
-                limit=limit,
+                limit=fetch_limit,
             )
         else:
-            hits = milvus.search_multi_channel(dense, channel_ids, limit=limit, query_text=query)
+            hits = milvus.search_multi_channel(dense, channel_ids, limit=fetch_limit, query_text=query)
     finally:
         milvus.close()
         await embedder.close()
+
+    # Post-filter by topic via a single Postgres lookup of the returned ids.
+    if topic_id is not None and hits:
+        try:
+            hit_ids = [str(h.get("id", "")) for h in hits if h.get("id")]
+            rows = await db_q.get_messages_by_ids(async_engine, hit_ids)
+            topic_of = {str(r["id"]): r.get("topic_id") for r in rows}
+            hits = [h for h in hits if topic_of.get(str(h.get("id", ""))) == topic_id][:limit]
+        except Exception:
+            log.warning("vector_search_topic_filter_failed", exc_info=True)
+            hits = hits[:limit]
 
     results = [
         {
@@ -700,3 +722,71 @@ async def get_schema(scope: str | None = None, ctx: Context = None) -> str:
             })
 
     return _ok({"schemas": schemas, "count": len(schemas)})
+
+
+@mcp.tool()
+async def fetch_messages(
+    scope: str,
+    sender: str | None = None,
+    topic_id: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    cursor: str | None = None,
+    limit: int = 200,
+    ctx: Context = None,
+) -> str:
+    """Fetch RAW messages by author / topic / time window — no LLM, no search ranking.
+
+    This is the tool for bulk retrieval like "give me everything <person> wrote in
+    this chat" or "all messages in <topic>". Unlike get_digest / get_agent_context
+    it does no embedding, clustering or LLM work — it's a single indexed DB query,
+    so it stays well inside the timeout. Page through the full set by passing the
+    returned `next_cursor` back in `cursor` until it comes back null.
+
+    Args:
+        scope: "@channel", "folder:Name", or "all". Use list_scopes to discover.
+        sender: Case-insensitive substring of the author's name (e.g. "Кристина").
+            Omit for any author.
+        topic_id: Restrict to one supergroup forum topic (see list_topics).
+        since: Start of window: "7d", "1m", "2026-03-23". Omit for no lower bound.
+        until: End of window (exclusive): same formats. Omit for "up to now".
+        cursor: Pagination cursor from a previous call's `next_cursor`.
+        limit: Page size (default 200, max 1000). Messages come oldest-first.
+
+    Returns:
+        JSON with `messages[]` (full content, sender, date, topic_id, url),
+        `count`, and `next_cursor` (null when the last page is reached).
+    """
+    owner_id = await _resolve_owner(ctx)
+    try:
+        result = await service.fetch_messages(
+            owner_id=owner_id, scope=scope, sender=sender, topic_id=topic_id,
+            since=since, until=until, cursor=cursor, limit=limit,
+        )
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
+    await _charge(ctx, 1, "fetch_messages")
+    return _ok(result, credits_used=1)
+
+
+@mcp.tool()
+async def list_topics(scope: str | None = None, ctx: Context = None) -> str:
+    """List supergroup forum topics in a chat, so you can filter by `topic_id`.
+
+    Telegram supergroups split conversation into topics; messages carry a
+    `topic_id`. Call this to discover the topics (id, recovered name, message
+    count, date range) before passing `topic_id` to fetch_messages /
+    keyword_search / vector_search.
+
+    Args:
+        scope: "@channel", "folder:Name", or "all". Omit for all sources.
+
+    Returns:
+        JSON with `topics[]` (topic_id, name, message_count, channel, date range).
+    """
+    owner_id = await _resolve_owner(ctx)
+    try:
+        result = await service.list_topics(owner_id=owner_id, scope=scope)
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
+    return _ok(result)

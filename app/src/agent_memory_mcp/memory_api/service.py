@@ -619,10 +619,12 @@ async def get_digest(
     if not clusters:
         return {"digest": "Not enough messages to generate digest.", "period": period}
 
-    # Map phase: summarize each cluster (same format as runner.py)
+    # Map phase: summarize each cluster (same format as runner.py). Clusters are
+    # independent, so fan the LLM calls out concurrently instead of awaiting them
+    # one-by-one — this is what kept 30d digests over the timeout.
     import asyncio
-    summaries = []
-    for cluster in clusters[:10]:  # max 10 clusters
+
+    async def _summarize_cluster(cluster) -> str | None:
         cluster_label = f"{getattr(cluster, 'emoji', '📌')} {getattr(cluster, 'label', 'Разное')}"
         posts_text = "\n\n---\n\n".join(
             f"[Пост] channel=@{domain_username_map.get(str(m.get('domain_id', '')), '?')} "
@@ -631,7 +633,7 @@ async def get_digest(
             for m in cluster.messages[:20]
         )
         try:
-            summary = await llm_call(
+            return await llm_call(
                 model="tier1/extraction",
                 messages=[
                     {"role": "system", "content": MAP_DIGEST_SYSTEM.format(
@@ -642,9 +644,14 @@ async def get_digest(
                 temperature=0.2,
                 max_tokens=1000,
             )
-            summaries.append(summary)
         except Exception:
             log.warning("digest_map_failed", exc_info=True)
+            return None
+
+    map_results = await asyncio.gather(
+        *(_summarize_cluster(c) for c in clusters[:10]),  # max 10 clusters
+    )
+    summaries = [s for s in map_results if s]
 
     if not summaries:
         return {"digest": "Failed to generate digest.", "period": period}
@@ -797,23 +804,140 @@ async def get_agent_context(owner_id: int, task: str, scope: str) -> dict:
     if not domain_ids:
         return {"context": "No sources connected.", "task": task}
 
-    # Run search, decisions in parallel
+    # Each component is LLM-heavy and was previously unbounded — a slow decisions
+    # extraction or agent loop would blow the MCP client's 120s budget and fail
+    # the whole call. Bound each independently and degrade: a component that times
+    # out reports the timeout instead of killing the package.
     import asyncio
-    search_task = asyncio.create_task(
-        search_memory(query=task, owner_id=owner_id, scope=scope, limit=5)
-    )
-    decisions_task = asyncio.create_task(
-        get_decisions(owner_id=owner_id, scope=scope)
-    )
 
-    search_result, decisions_result = await asyncio.gather(search_task, decisions_task)
+    async def _bounded(coro, timeout: float, label: str):
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            log.warning("agent_context_component_timeout", component=label)
+            return {"error": "timeout", "component": label}
+        except Exception as exc:
+            log.warning("agent_context_component_failed", component=label, exc_info=True)
+            return {"error": str(exc), "component": label}
+
+    search_result, decisions_result, recent_result = await asyncio.gather(
+        _bounded(search_memory(query=task, owner_id=owner_id, scope=scope, limit=5), 70, "search"),
+        _bounded(get_decisions(owner_id=owner_id, scope=scope), 40, "decisions"),
+        # Cheap LLM-free raw window so the package always carries real messages
+        # even if the heavy components degrade.
+        _bounded(fetch_messages(owner_id=owner_id, scope=scope, since="7d", limit=30), 20, "recent"),
+    )
 
     return {
         "task": task,
         "search": search_result,
         "decisions": decisions_result,
+        "recent_messages": recent_result,
         "source_count": len(domain_ids),
     }
+
+
+async def fetch_messages(
+    owner_id: int,
+    scope: str,
+    sender: str | None = None,
+    topic_id: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    cursor: str | None = None,
+    limit: int = 200,
+) -> dict:
+    """Raw messages by author / topic / time window, keyset-paginated.
+
+    LLM-free: a single indexed DB query, not the embedding/clustering/agent
+    pipeline. This is the tool for "give me everything <person> wrote" or
+    "everything in <topic>" — page through with the returned ``next_cursor``
+    until it is null.
+    """
+    from agent_memory_mcp.utils.links import make_tme_link
+
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"messages": [], "next_cursor": None, "message": "No sources connected."}
+
+    since_dt = _parse_since(since)
+    until_dt = _parse_since(until)
+    after_date, after_id = _decode_cursor(cursor)
+    limit = max(1, min(int(limit or 200), 1000))
+
+    rows = await db_q.get_messages_filtered(
+        async_engine, domain_ids,
+        since=since_dt, until=until_dt,
+        sender=sender, topic_id=topic_id,
+        after_date=after_date, after_id=after_id,
+        limit=limit,
+    )
+
+    # domain_id → (username, channel_id) for link building
+    dmap: dict = {}
+    for did in domain_ids:
+        d = await db_q.get_domain(async_engine, did)
+        if d:
+            dmap[d["id"]] = (d.get("channel_username"), d.get("channel_id"))
+
+    out = []
+    for r in rows:
+        username, channel_id = dmap.get(r["domain_id"], (None, None))
+        url = make_tme_link(
+            username, r.get("telegram_msg_id"), r.get("topic_id"), channel_id,
+        )
+        out.append({
+            "id": str(r["id"]),
+            "content": r.get("content", ""),
+            "sender": r.get("sender_name"),
+            "date": str(r["msg_date"]) if r.get("msg_date") else None,
+            "topic_id": r.get("topic_id"),
+            "telegram_msg_id": r.get("telegram_msg_id"),
+            "channel_id": channel_id,
+            "url": url or None,
+        })
+
+    next_cursor = None
+    if rows and len(rows) == limit:
+        last = rows[-1]
+        next_cursor = _encode_cursor(last["msg_date"], last["id"])
+
+    return {
+        "messages": out,
+        "count": len(out),
+        "next_cursor": next_cursor,
+        "filters": {"sender": sender, "topic_id": topic_id, "since": since, "until": until},
+    }
+
+
+async def list_topics(owner_id: int, scope: str | None = None) -> dict:
+    """List supergroup forum topics so an agent can pick a ``topic_id`` to filter by.
+
+    Topic names are recovered from each topic's root message where available.
+    """
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"topics": [], "message": "No sources connected."}
+
+    dmap: dict = {}
+    for did in domain_ids:
+        d = await db_q.get_domain(async_engine, did)
+        if d:
+            dmap[d["id"]] = d.get("channel_username")
+
+    rows = await db_q.get_topics(async_engine, domain_ids)
+    topics = []
+    for r in rows:
+        name = (r.get("topic_name") or "").strip().replace("\n", " ")
+        topics.append({
+            "topic_id": r["topic_id"],
+            "name": (name[:80] or None),
+            "message_count": r.get("message_count", 0),
+            "channel": (f"@{dmap.get(r['domain_id'])}" if dmap.get(r["domain_id"]) else None),
+            "first_date": str(r["first_date"]) if r.get("first_date") else None,
+            "last_date": str(r["last_date"]) if r.get("last_date") else None,
+        })
+    return {"topics": topics, "count": len(topics)}
 
 
 class ScopeNotFound(Exception):

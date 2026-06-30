@@ -503,8 +503,11 @@ async def search_messages_bm25(
     domain_id: UUID,
     query_text: str,
     limit: int = 500,
+    topic_id: int | None = None,
 ) -> tuple[list[dict], int]:
     """BM25 search with scoring. ParadeDB primary, tsvector fallback.
+
+    ``topic_id`` (optional) restricts the search to one supergroup forum topic.
 
     Returns (rows_with_score, total_count).
     """
@@ -513,25 +516,30 @@ async def search_messages_bm25(
 
     from sqlalchemy import text as sa_text
 
+    # Optional topic filter, pushed into the WHERE so it never shrinks the
+    # top-`limit` window after scoring.
+    topic_sql = " AND topic_id = :topic" if topic_id is not None else ""
+    topic_param = {"topic": topic_id} if topic_id is not None else {}
+
     # Try ParadeDB BM25 first (each in its own transaction to avoid aborted state)
     try:
         bm25_query = _build_bm25_query(query_text)
         async with engine.begin() as conn:
-            count_row = await conn.execute(sa_text("""
+            count_row = await conn.execute(sa_text(f"""
                 SELECT COUNT(*) FROM messages
                 WHERE domain_id = :domain_id
-                  AND id @@@ paradedb.parse(:query)
-            """), {"domain_id": domain_id, "query": bm25_query})
+                  AND id @@@ paradedb.parse(:query){topic_sql}
+            """), {"domain_id": domain_id, "query": bm25_query, **topic_param})
             total = count_row.scalar() or 0
 
-            rows = await conn.execute(sa_text("""
+            rows = await conn.execute(sa_text(f"""
                 SELECT *, paradedb.score(id) AS bm25_score
                 FROM messages
                 WHERE domain_id = :domain_id
-                  AND id @@@ paradedb.parse(:query)
+                  AND id @@@ paradedb.parse(:query){topic_sql}
                 ORDER BY bm25_score DESC
                 LIMIT :lim
-            """), {"domain_id": domain_id, "query": bm25_query, "lim": limit})
+            """), {"domain_id": domain_id, "query": bm25_query, "lim": limit, **topic_param})
             return [dict(r) for r in rows.mappings().all()], total
     except Exception:
         pass
@@ -544,21 +552,21 @@ async def search_messages_bm25(
         if not ts_query:
             ts_query = query_text
         async with engine.begin() as conn:
-            count_row = await conn.execute(sa_text("""
+            count_row = await conn.execute(sa_text(f"""
                 SELECT COUNT(*) FROM messages
                 WHERE domain_id = :domain_id
-                  AND content_tsv @@ to_tsquery('russian', :tsq)
-            """), {"domain_id": domain_id, "tsq": ts_query})
+                  AND content_tsv @@ to_tsquery('russian', :tsq){topic_sql}
+            """), {"domain_id": domain_id, "tsq": ts_query, **topic_param})
             total = count_row.scalar() or 0
 
-            rows = await conn.execute(sa_text("""
+            rows = await conn.execute(sa_text(f"""
                 SELECT *, ts_rank(content_tsv, to_tsquery('russian', :tsq)) AS bm25_score
                 FROM messages
                 WHERE domain_id = :domain_id
-                  AND content_tsv @@ to_tsquery('russian', :tsq)
+                  AND content_tsv @@ to_tsquery('russian', :tsq){topic_sql}
                 ORDER BY bm25_score DESC
                 LIMIT :lim
-            """), {"domain_id": domain_id, "tsq": ts_query, "lim": limit})
+            """), {"domain_id": domain_id, "tsq": ts_query, "lim": limit, **topic_param})
             return [dict(r) for r in rows.mappings().all()], total
     except Exception:
         pass
@@ -569,16 +577,19 @@ async def search_messages_bm25(
         return [], 0
     from sqlalchemy import or_
     conditions = [messages.c.content.ilike(f"%{kw}%") for kw in keywords]
+    base_conds = [messages.c.domain_id == domain_id, or_(*conditions)]
+    if topic_id is not None:
+        base_conds.append(messages.c.topic_id == topic_id)
     async with engine.begin() as conn:
         count_stmt = (
             select(func.count())
             .select_from(messages)
-            .where(messages.c.domain_id == domain_id, or_(*conditions))
+            .where(*base_conds)
         )
         total = (await conn.execute(count_stmt)).scalar() or 0
         data_stmt = (
             select(messages)
-            .where(messages.c.domain_id == domain_id, or_(*conditions))
+            .where(*base_conds)
             .order_by(messages.c.msg_date.desc())
             .limit(limit)
         )
@@ -747,39 +758,45 @@ async def search_messages_bm25_multi(
     domain_ids: list[UUID],
     query_text: str,
     limit: int = 500,
+    topic_id: int | None = None,
 ) -> tuple[list[dict], int]:
     """BM25 search across multiple domains. Wrapper around single-domain search.
 
     For single domain, delegates to search_messages_bm25.
     For multiple, uses domain_id = ANY(:ids).
+
+    ``topic_id`` (optional) restricts the search to one supergroup forum topic.
     """
     if not query_text or not domain_ids:
         return [], 0
 
     if len(domain_ids) == 1:
-        return await search_messages_bm25(engine, domain_ids[0], query_text, limit)
+        return await search_messages_bm25(engine, domain_ids[0], query_text, limit, topic_id=topic_id)
 
     from sqlalchemy import text as sa_text
+
+    topic_sql = " AND topic_id = :topic" if topic_id is not None else ""
+    topic_param = {"topic": topic_id} if topic_id is not None else {}
 
     # Try ParadeDB BM25 first
     try:
         bm25_query = _build_bm25_query(query_text)
         async with engine.begin() as conn:
-            count_row = await conn.execute(sa_text("""
+            count_row = await conn.execute(sa_text(f"""
                 SELECT COUNT(*) FROM messages
                 WHERE domain_id = ANY(:ids)
-                  AND id @@@ paradedb.parse(:query)
-            """), {"ids": list(domain_ids), "query": bm25_query})
+                  AND id @@@ paradedb.parse(:query){topic_sql}
+            """), {"ids": list(domain_ids), "query": bm25_query, **topic_param})
             total = count_row.scalar() or 0
 
-            rows = await conn.execute(sa_text("""
+            rows = await conn.execute(sa_text(f"""
                 SELECT *, paradedb.score(id) AS bm25_score
                 FROM messages
                 WHERE domain_id = ANY(:ids)
-                  AND id @@@ paradedb.parse(:query)
+                  AND id @@@ paradedb.parse(:query){topic_sql}
                 ORDER BY bm25_score DESC
                 LIMIT :lim
-            """), {"ids": list(domain_ids), "query": bm25_query, "lim": limit})
+            """), {"ids": list(domain_ids), "query": bm25_query, "lim": limit, **topic_param})
             return [dict(r) for r in rows.mappings().all()], total
     except Exception:
         pass
@@ -790,21 +807,21 @@ async def search_messages_bm25_multi(
         if not ts_query:
             ts_query = query_text
         async with engine.begin() as conn:
-            count_row = await conn.execute(sa_text("""
+            count_row = await conn.execute(sa_text(f"""
                 SELECT COUNT(*) FROM messages
                 WHERE domain_id = ANY(:ids)
-                  AND content_tsv @@ to_tsquery('russian', :tsq)
-            """), {"ids": list(domain_ids), "tsq": ts_query})
+                  AND content_tsv @@ to_tsquery('russian', :tsq){topic_sql}
+            """), {"ids": list(domain_ids), "tsq": ts_query, **topic_param})
             total = count_row.scalar() or 0
 
-            rows = await conn.execute(sa_text("""
+            rows = await conn.execute(sa_text(f"""
                 SELECT *, ts_rank(content_tsv, to_tsquery('russian', :tsq)) AS bm25_score
                 FROM messages
                 WHERE domain_id = ANY(:ids)
-                  AND content_tsv @@ to_tsquery('russian', :tsq)
+                  AND content_tsv @@ to_tsquery('russian', :tsq){topic_sql}
                 ORDER BY bm25_score DESC
                 LIMIT :lim
-            """), {"ids": list(domain_ids), "tsq": ts_query, "lim": limit})
+            """), {"ids": list(domain_ids), "tsq": ts_query, "lim": limit, **topic_param})
             return [dict(r) for r in rows.mappings().all()], total
     except Exception:
         pass
@@ -815,16 +832,19 @@ async def search_messages_bm25_multi(
         return [], 0
     from sqlalchemy import or_
     conditions = [messages.c.content.ilike(f"%{kw}%") for kw in keywords]
+    base_conds = [messages.c.domain_id.in_(domain_ids), or_(*conditions)]
+    if topic_id is not None:
+        base_conds.append(messages.c.topic_id == topic_id)
     async with engine.begin() as conn:
         count_stmt = (
             select(func.count())
             .select_from(messages)
-            .where(messages.c.domain_id.in_(domain_ids), or_(*conditions))
+            .where(*base_conds)
         )
         total = (await conn.execute(count_stmt)).scalar() or 0
         data_stmt = (
             select(messages)
-            .where(messages.c.domain_id.in_(domain_ids), or_(*conditions))
+            .where(*base_conds)
             .order_by(messages.c.msg_date.desc())
             .limit(limit)
         )
@@ -936,6 +956,104 @@ async def get_activity_events(
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+async def get_messages_filtered(
+    engine: AsyncEngine,
+    domain_ids: list[UUID],
+    since: "datetime | None" = None,
+    until: "datetime | None" = None,
+    sender: str | None = None,
+    topic_id: int | None = None,
+    after_date: "datetime | None" = None,
+    after_id: "UUID | None" = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Raw messages WITH content, filtered by sender / topic / date window.
+
+    Oldest-first by ``(msg_date, id)`` so a caller can drain the full set with a
+    keyset cursor without offset drift. This is the LLM-free workhorse behind the
+    ``fetch_messages`` MCP tool: a single indexed query (idx_messages_domain_date)
+    instead of an embedding / clustering / agent pipeline.
+
+    Args:
+        sender: case-insensitive substring match on ``sender_name`` (e.g. a first
+            name). None = any sender.
+        topic_id: exact forum-topic id (supergroup topics). None = all topics.
+        after_date / after_id: keyset cursor from the previous page.
+    """
+    if not domain_ids:
+        return []
+    conds = [
+        messages.c.domain_id.in_(domain_ids),
+        messages.c.is_noise.is_(False),
+    ]
+    if since is not None:
+        conds.append(messages.c.msg_date >= since)
+    if until is not None:
+        conds.append(messages.c.msg_date < until)
+    if sender:
+        conds.append(messages.c.sender_name.ilike(f"%{sender}%"))
+    if topic_id is not None:
+        conds.append(messages.c.topic_id == topic_id)
+    if after_date is not None and after_id is not None:
+        conds.append(
+            or_(
+                messages.c.msg_date > after_date,
+                and_(messages.c.msg_date == after_date, messages.c.id > after_id),
+            )
+        )
+    stmt = (
+        select(messages)
+        .where(*conds)
+        .order_by(messages.c.msg_date.asc(), messages.c.id.asc())
+        .limit(limit)
+    )
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def get_topics(
+    engine: AsyncEngine,
+    domain_ids: list[UUID],
+    limit: int = 100,
+) -> list[dict]:
+    """List forum topics seen across domains: topic_id, count, date range, name.
+
+    Topic names are not stored separately — Telegram makes the topic id equal to
+    its root ("topic created") message id, so we recover a human-readable name
+    from that root message's content where available.
+
+    Returns topics sorted by recency (most recent activity first).
+    """
+    if not domain_ids:
+        return []
+    from sqlalchemy import text as sa_text
+
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            sa_text("""
+                SELECT m.topic_id,
+                       m.domain_id,
+                       COUNT(*)            AS message_count,
+                       MIN(m.msg_date)     AS first_date,
+                       MAX(m.msg_date)     AS last_date,
+                       MAX(root.content)   AS topic_name
+                FROM messages m
+                LEFT JOIN messages root
+                  ON root.domain_id = m.domain_id
+                 AND root.telegram_msg_id = m.topic_id
+                WHERE m.domain_id = ANY(:ids)
+                  AND m.topic_id IS NOT NULL
+                  AND m.is_noise = FALSE
+                GROUP BY m.topic_id, m.domain_id
+                ORDER BY last_date DESC
+                LIMIT :lim
+            """),
+            {"ids": list(domain_ids), "lim": limit},
+        )
+        return [dict(r) for r in rows.mappings().all()]
 
 
 # ---------------------------------------------------------------------------
