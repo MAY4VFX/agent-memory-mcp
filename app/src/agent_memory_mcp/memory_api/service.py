@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db import queries_groups as db_g
+from agent_memory_mcp.db import queries_labels as db_ql
 from agent_memory_mcp.db.engine import async_engine
 from agent_memory_mcp.storage.embedding_client import EmbeddingClient
 from agent_memory_mcp.storage.falkordb_client import FalkorDBStorage
@@ -840,6 +841,19 @@ def _decode_cursor(cursor: str | None):
         return None, None
 
 
+def _label_fields(lbl: dict | None) -> dict:
+    """Per-event classification fields from a chat's single label (project=work
+    or personal=non-work); all null when the chat is unlabelled."""
+    is_project = bool(lbl) and lbl["type"] == "project"
+    return {
+        "is_work": (lbl["type"] == "project") if lbl else None,
+        "project_id": lbl["label_id"] if is_project else None,
+        "project_name": lbl["name"] if is_project else None,
+        "category": lbl["name"] if lbl and not is_project else None,
+        "label_confidence": lbl["confidence"] if lbl else None,
+    }
+
+
 async def get_activity(
     owner_id: int,
     since,
@@ -875,7 +889,7 @@ async def get_activity(
     }
 
     # Chat → classification label (work project or personal category), per event.
-    label_map = await db_q.get_domain_label_map(async_engine, domain_ids)
+    label_map = await db_ql.get_domain_label_map(async_engine, domain_ids)
 
     after_date, after_id = _decode_cursor(cursor)
     rows = await db_q.get_activity_events(
@@ -903,11 +917,7 @@ async def get_activity(
                 "telegram_msg_id": r.get("telegram_msg_id"),
                 # Classification from the chat classifier: every chat is labelled
                 # either as a work project (is_work) or a personal category.
-                "is_work": (lbl["type"] == "project") if lbl else None,
-                "project_id": lbl["label_id"] if lbl and lbl["type"] == "project" else None,
-                "project_name": lbl["name"] if lbl and lbl["type"] == "project" else None,
-                "category": lbl["name"] if lbl and lbl["type"] != "project" else None,
-                "label_confidence": lbl["confidence"] if lbl else None,
+                **_label_fields(lbl),
                 "task_id": None,
                 "read_at": r["read_at"].isoformat() if r.get("read_at") else None,
             }
@@ -944,7 +954,7 @@ async def classify_labels(owner_id: int) -> dict:
 
 async def list_labels(owner_id: int, type_: str | None = None) -> dict:
     """List the owner's labels (optionally filtered by type)."""
-    rows = await db_q.list_labels(async_engine, owner_id, type_)
+    rows = await db_ql.list_labels(async_engine, owner_id, type_)
     labels = [
         {
             "id": str(r["id"]),

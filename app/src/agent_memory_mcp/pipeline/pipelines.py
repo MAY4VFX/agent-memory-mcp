@@ -135,6 +135,7 @@ async def run_initial_ingestion(
     # 4. Schema discovery (also detects the work project — see SGR prompt)
     from uuid import UUID as _UUID
     from agent_memory_mcp.db import queries as _dbq
+    from agent_memory_mcp.db import queries_labels as _dbql
     from agent_memory_mcp.db.engine import async_engine as _eng
 
     _domain = None
@@ -167,10 +168,10 @@ async def run_initial_ingestion(
     # classification at ingest — no separate pass). Best-effort.
     if _domain and getattr(schema_result, "project", ""):
         try:
-            label_id = await _dbq.upsert_label(
+            label_id = await _dbql.upsert_label(
                 _eng, _domain["owner_id"], "project", schema_result.project
             )
-            await _dbq.set_domain_project_label(
+            await _dbql.set_domain_project_label(
                 _eng, _UUID(domain_id), label_id, confidence=0.8, source="content"
             )
             log.info("project_label_set", domain_id=domain_id, project=schema_result.project)

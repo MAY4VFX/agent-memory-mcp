@@ -15,6 +15,7 @@ import structlog
 
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.db import queries as db_q
+from agent_memory_mcp.db import queries_labels as db_ql
 from agent_memory_mcp.db.engine import async_engine
 from agent_memory_mcp.llm.client import llm_call_json
 
@@ -75,15 +76,18 @@ async def classify_owner_chats(
     from collections import defaultdict
     domain_by_id = {d["id"]: d for d in domains}
     sender_domains: dict = defaultdict(set)
-    for sid, did in await db_q.get_sender_domains(async_engine, list(domain_by_id)):
+    for sid, did in await db_ql.get_sender_domains(async_engine, list(domain_by_id)):
         sender_domains[sid].add(did)
+
+    # One windowed query for all chats' recent snippets (avoids N+1 per domain).
+    recent_by_domain = await db_q.get_recent_messages_for_domains(
+        async_engine, list(domain_by_id), days=60, per_domain_limit=snippets_per_chat
+    )
 
     # Build the prompt: title + a few short recent snippets per chat.
     blocks = []
     for d in domains:
-        recent = await db_q.get_recent_messages(
-            async_engine, d["id"], days=60, limit=snippets_per_chat
-        )
+        recent = recent_by_domain.get(d["id"], [])
         snips = [
             (m.get("content") or "").strip().replace("\n", " ")[:snippet_chars]
             for m in recent
@@ -136,8 +140,8 @@ async def classify_owner_chats(
         is_work = bool(a.get("is_work", True))
         label_type = "project" if is_work else "personal"
         source = a.get("source") if a.get("source") in ("title", "content") else None
-        label_id = await db_q.upsert_label(async_engine, owner_id, label_type, name)
-        await db_q.set_domain_project_label(async_engine, did, label_id, conf, source)
+        label_id = await db_ql.upsert_label(async_engine, owner_id, label_type, name)
+        await db_ql.set_domain_project_label(async_engine, did, label_id, conf, source)
         assigned.append({"domain_id": str(did), "label": name, "is_work": is_work, "confidence": conf})
 
     log.info("label_classify_done", owner_id=owner_id, assigned=len(assigned))
