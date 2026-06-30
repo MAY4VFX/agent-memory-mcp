@@ -972,35 +972,6 @@ async def upsert_label(
         return (await conn.execute(stmt)).scalar_one()
 
 
-async def set_domain_label(
-    engine: AsyncEngine,
-    domain_id: UUID,
-    label_id: UUID,
-    confidence: float | None,
-    source: str | None,
-) -> None:
-    """Attach (or refresh) a label on a chat/domain."""
-    stmt = (
-        pg_insert(domain_labels)
-        .values(
-            domain_id=domain_id,
-            label_id=label_id,
-            confidence=confidence,
-            source=source,
-        )
-        .on_conflict_do_update(
-            index_elements=["domain_id", "label_id"],
-            set_={
-                "confidence": confidence,
-                "source": source,
-                "created_at": text("now()"),
-            },
-        )
-    )
-    async with engine.begin() as conn:
-        await conn.execute(stmt)
-
-
 async def get_sender_domains(engine: AsyncEngine, domain_ids: list[UUID]) -> list[tuple]:
     """Distinct (sender_id, domain_id) pairs across the given domains.
 

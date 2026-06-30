@@ -13,18 +13,16 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from agent_memory_mcp.bot.keyboards import (
     add_sources_kb,
     domain_list_kb,
-    folder_list_kb,
     folder_multi_kb,
     group_list_kb,
     list_detail_kb,
     main_menu_kb,
     manage_kb,
-    period_kb,
     request_chat_kb,
     source_picker_kb,
     sources_hub_kb,
 )
-from agent_memory_mcp.bot.states import AddChannelStates, AddSourceStates, GroupStates
+from agent_memory_mcp.bot.states import AddSourceStates, GroupStates
 from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
@@ -275,74 +273,6 @@ async def _user_folders(user_id: int) -> list[dict]:
     if not uc:
         return []
     return await uc.get_folders()
-
-
-@router.callback_query(F.data == "hub:folders")
-async def hub_folders(callback: CallbackQuery) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
-    await callback.answer()
-    folders = await _user_folders(callback.from_user.id)
-    if not folders:
-        await _safe_edit(
-            callback.message,
-            "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e TG-\u043f\u0430\u043f\u043e\u043a \u0441 \u043a\u0430\u043d\u0430\u043b\u0430\u043c\u0438.",
-        )
-        return
-    await _safe_edit(
-        callback.message,
-        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0430\u043f\u043a\u0443 \u0434\u043b\u044f \u0438\u043c\u043f\u043e\u0440\u0442\u0430:", reply_markup=folder_list_kb(folders),
-    )
-
-
-# ------------------------------------------------------------------ Folder import
-
-@router.callback_query(F.data == "groups:folders")
-async def show_folders(callback: CallbackQuery) -> None:
-    """Legacy callback — redirect to hub:folders."""
-    await hub_folders(callback)
-
-
-@router.callback_query(F.data.startswith("folder_import:"))
-async def import_folder(
-    callback: CallbackQuery, state: FSMContext,
-) -> None:
-    """Store folder data in FSM and ask for sync period."""
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        return
-    await callback.answer()
-
-    folder_id = int(callback.data.split(":")[1])
-    folders = await _user_folders(callback.from_user.id)
-    folder = next((f for f in folders if f["id"] == folder_id), None)
-    if not folder:
-        await callback.message.edit_text("\u041f\u0430\u043f\u043a\u0430 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
-        return
-
-    peers = folder["peers"]
-    supported = [p for p in peers if p.get("supported", True)]
-    skipped = len(peers) - len(supported)
-
-    # Store only ingestable peers; later creation runs after period/freq.
-    await state.update_data(
-        folder_import={
-            "folder_id": folder_id,
-            "folder_title": folder["title"],
-            "peers": supported,
-        }
-    )
-    note = f"Folder \"{folder['title']}\": {len(supported)} chat(s) to import"
-    if skipped:
-        note += f"\n\u26a0\ufe0f skipped {skipped} unsupported"
-    if not supported:
-        await callback.message.edit_text(note + "\n\nNothing to add.")
-        await state.clear()
-        return
-    await callback.message.edit_text(
-        note + "\n\nChoose sync depth:",
-        reply_markup=period_kb(),
-    )
-    await state.set_state(AddChannelStates.choosing_period)
 
 
 # ------------------------------------------------------------------ List CRUD

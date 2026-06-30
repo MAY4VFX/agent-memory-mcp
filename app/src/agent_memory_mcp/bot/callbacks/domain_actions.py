@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
-from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import structlog
@@ -20,13 +18,11 @@ from agent_memory_mcp.bot.keyboards import (
     edit_depth_kb,
     edit_emoji_kb,
     edit_freq_kb,
-    frequency_kb,
-    list_detail_kb,
     main_menu_kb,
     search_mode_kb,
     settings_kb,
 )
-from agent_memory_mcp.bot.states import AddChannelStates, SettingsStates
+from agent_memory_mcp.bot.states import SettingsStates
 from agent_memory_mcp.config import is_allowed_user, settings as app_settings
 from agent_memory_mcp.db import queries
 from agent_memory_mcp.db import queries_groups as gq
@@ -38,17 +34,6 @@ router = Router()
 
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 
-# ---- Period depth mapping ----
-_PERIOD_MAP: dict[str, str] = {
-    "1w": "1w",
-    "1m": "1m",
-    "3m": "3m",
-    "6m": "6m",
-    "1y": "1y",
-    "3y": "3y",
-    "all": "all",
-}
-
 _PERIOD_LABELS: dict[str, str] = {
     "1w": "1 неделя",
     "1m": "1 месяц",
@@ -58,238 +43,6 @@ _PERIOD_LABELS: dict[str, str] = {
     "3y": "3 года",
     "all": "Все сообщения",
 }
-
-
-# ---- Period selection ----
-
-
-@router.callback_query(F.data.startswith("period:"))
-async def on_period(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    period_key = callback.data.split(":", 1)[1]
-    if period_key not in _PERIOD_MAP:
-        await callback.answer("Неизвестный период.", show_alert=True)
-        return
-    await state.update_data(sync_depth=_PERIOD_MAP[period_key])
-    await callback.message.edit_text(
-        f"Глубина: <b>{_PERIOD_LABELS[period_key]}</b>\n\n"
-        "Выберите частоту синхронизации:",
-        reply_markup=frequency_kb(),
-    )
-    await state.set_state(AddChannelStates.choosing_frequency)
-    await callback.answer()
-
-
-# ---- Frequency selection ----
-
-
-@router.callback_query(F.data.startswith("freq:"))
-async def on_frequency(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    freq_minutes = int(callback.data.split(":", 1)[1])
-    await state.update_data(sync_frequency_minutes=freq_minutes)
-    data = await state.get_data()
-
-    # The only flow reaching freq selection is folder import.
-    if "folder_import" in data:
-        await callback.answer()
-        await _finish_folder_import(callback, state, data)
-        return
-
-    await state.clear()
-    await callback.answer()
-    await callback.message.edit_text(
-        "Сессия истекла. Откройте «➕ Добавить источник» в меню источников.",
-    )
-
-
-# ---- Emoji selection → create domain ----
-async def _edit_progress(callback: CallbackQuery, text: str) -> None:
-    """Edit callback message, ignoring errors."""
-    try:
-        await callback.message.edit_text(text)
-    except Exception:
-        pass
-def _depth_to_date(depth: str) -> datetime | None:
-    """Convert sync depth string to offset_date."""
-    now = datetime.now(timezone.utc)
-    mapping = {
-        "1w": timedelta(weeks=1),
-        "1m": timedelta(days=30),
-        "3m": timedelta(days=90),
-        "6m": timedelta(days=180),
-        "1y": timedelta(days=365),
-        "3y": timedelta(days=1095),
-    }
-    delta = mapping.get(depth)
-    if delta is None:
-        return None  # "all" — no date limit
-    return now - delta
-
-
-# ---- Batch / folder finish helpers ----
-
-
-def _sync_progress_text(
-    title: str, domain_rows: list[dict], sync_depth: str, freq: int,
-) -> str:
-    """Build progress text for sync tracking."""
-    synced = [d for d in domain_rows if d.get("last_synced_at")]
-    total_msgs = sum(d.get("message_count", 0) or 0 for d in domain_rows)
-
-    lines = [f"\U0001f4e5 <b>{title}</b>"]
-    lines.append(
-        f"\u0413\u043b\u0443\u0431\u0438\u043d\u0430: {_PERIOD_LABELS.get(sync_depth, sync_depth)} "
-        f"| \u0427\u0430\u0441\u0442\u043e\u0442\u0430: {freq} \u043c\u0438\u043d"
-    )
-    lines.append(f"\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e: {len(synced)}/{len(domain_rows)} "
-                 f"| \u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439: {total_msgs}\n")
-
-    for d in domain_rows:
-        name = d["display_name"][:30]
-        mc = d.get("message_count", 0) or 0
-        if d.get("last_synced_at"):
-            lines.append(f"\u2705 {name} — {mc}")
-        else:
-            lines.append(f"\u23f3 {name}")
-
-    if len(synced) == len(domain_rows):
-        lines.append(f"\n\u2705 \u0412\u0441\u0435 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u044b! ({total_msgs} \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439)")
-    else:
-        lines.append(f"\n\U0001f504 \u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u043a\u0430\u0436\u0434\u044b\u0435 10 \u0441\u0435\u043a...")
-
-    return "\n".join(lines)
-
-
-async def _track_sync_progress(
-    message, title: str, domain_ids: list, sync_depth: str, freq: int,
-    group_id: str | None = None,
-) -> None:
-    """Background task: update message with sync progress every 10s."""
-    MAX_UPDATES = 180  # 30 min max tracking
-
-    prev_text = ""
-    for _ in range(MAX_UPDATES):
-        await asyncio.sleep(10)
-        try:
-            rows = []
-            for did in domain_ids:
-                d = await queries.get_domain(async_engine, did)
-                if d:
-                    rows.append(d)
-
-            text = _sync_progress_text(title, rows, sync_depth, freq)
-            if text != prev_text:
-                # Add keyboard when all done
-                kb = None
-                synced = [d for d in rows if d.get("last_synced_at")]
-                if len(synced) == len(rows) and group_id:
-                    group_domains = await gq.get_group_domains(async_engine, group_id)
-                    kb = list_detail_kb(group_id, group_domains)
-                try:
-                    await message.edit_text(text, reply_markup=kb)
-                except Exception:
-                    pass
-                prev_text = text
-
-            # Stop when all synced
-            if all(d.get("last_synced_at") for d in rows):
-                break
-        except Exception:
-            log.exception("track_sync_progress_error")
-            break
-async def _finish_folder_import(
-    callback: CallbackQuery, state: FSMContext, data: dict,
-) -> None:
-    """Create list + domains from folder_import with chosen period/frequency."""
-    fi = data["folder_import"]
-    sync_depth = data.get("sync_depth", "3m")
-    freq = data.get("sync_frequency_minutes", 60)
-
-    folder_title = fi["folder_title"]
-    folder_id = fi["folder_id"]
-    peers = fi["peers"]
-
-    await callback.message.edit_text(
-        f"\u23f3 \u0418\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u0443\u044e \u043f\u0430\u043f\u043a\u0443 \"{folder_title}\"..."
-    )
-
-    # Create list
-    try:
-        group = await gq.create_group(
-            async_engine,
-            owner_id=callback.from_user.id,
-            name=folder_title,
-            tg_folder_id=folder_id,
-            sync_depth=sync_depth,
-        )
-    except Exception:
-        groups = await gq.list_groups(async_engine, callback.from_user.id)
-        existing = next((g for g in groups if g["name"] == folder_title), None)
-        if existing:
-            group = existing
-        else:
-            await state.clear()
-            await callback.message.edit_text("\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u044f \u0441\u043f\u0438\u0441\u043a\u0430.")
-            return
-
-    # Create domains and add to list
-    created_ids = []
-    existing_domains = await queries.list_domains(async_engine, callback.from_user.id)
-    existing_cids = {d["channel_id"]: d["id"] for d in existing_domains}
-
-    for peer in peers:
-        try:
-            if peer["channel_id"] in existing_cids:
-                domain_id = existing_cids[peer["channel_id"]]
-            else:
-                domain = await queries.create_domain(
-                    async_engine,
-                    owner_id=callback.from_user.id,
-                    channel_id=peer["channel_id"],
-                    channel_username=peer["username"],
-                    channel_name=peer["title"],
-                    sync_depth=sync_depth,
-                    sync_frequency_minutes=freq,
-                    emoji="\U0001f4da",
-                    display_name=peer["title"][:50],
-                    peer_type="chat" if peer.get("type") == "group" else "channel",
-                )
-                domain_id = domain["id"]
-                await queries.update_domain(
-                    async_engine, domain_id,
-                    next_sync_at=datetime.now(timezone.utc),
-                )
-                existing_cids[peer["channel_id"]] = domain_id
-            await gq.add_domains_to_group(async_engine, group["id"], [domain_id])
-            created_ids.append(domain_id)
-        except Exception:
-            log.exception("folder_import_peer_failed", peer=peer)
-
-    await state.clear()
-
-    # Show initial progress and start tracking
-    rows = [await queries.get_domain(async_engine, did) for did in created_ids]
-    rows = [r for r in rows if r]
-    text = _sync_progress_text(
-        f"\u0421\u043f\u0438\u0441\u043e\u043a \"{group['name']}\"",
-        rows, sync_depth, freq,
-    )
-    await callback.message.edit_text(text)
-
-    asyncio.create_task(
-        _track_sync_progress(
-            callback.message,
-            f"\u0421\u043f\u0438\u0441\u043e\u043a \"{group['name']}\"",
-            created_ids, sync_depth, freq,
-            group_id=str(group["id"]),
-        ),
-        name=f"track_folder_{group['id']}",
-    )
 
 
 # ---- Domain view / actions ----

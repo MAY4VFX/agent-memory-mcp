@@ -957,6 +957,13 @@ async def list_labels(owner_id: int, type_: str | None = None) -> dict:
     return {"labels": labels, "count": len(labels)}
 
 
+async def list_active_users() -> dict:
+    """Users with an active Telegram session — the tg_ids the cross-source
+    workload resolver fetches per-user activity for."""
+    tg_ids = await db_q.list_active_telegram_sessions(async_engine)
+    return {"users": [{"telegram_id": t} for t in tg_ids]}
+
+
 async def _resolve_scope(owner_id: int, scope: str | None) -> list[UUID]:
     """Resolve a scope string to domain IDs for the owner.
 

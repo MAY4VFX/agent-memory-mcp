@@ -3,12 +3,6 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
-class AddChannelStates(StatesGroup):
-    choosing_period = State()
-    choosing_frequency = State()
-    processing = State()
-
-
 class SettingsStates(StatesGroup):
     managing_domains = State()
     editing_domain = State()

@@ -55,37 +55,6 @@ def main_menu_kb(active_domain: dict | None = None, scope_label: str = "") -> Re
     )
 
 
-def period_kb() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text="1 \u043d\u0435\u0434\u0435\u043b\u044f", callback_data="period:1w")],
-        [InlineKeyboardButton(text="1 \u043c\u0435\u0441\u044f\u0446", callback_data="period:1m")],
-        [InlineKeyboardButton(text="3 \u043c\u0435\u0441\u044f\u0446\u0430", callback_data="period:3m")],
-        [InlineKeyboardButton(text="6 \u043c\u0435\u0441\u044f\u0446\u0435\u0432", callback_data="period:6m")],
-        [InlineKeyboardButton(text="1 \u0433\u043e\u0434", callback_data="period:1y")],
-        [InlineKeyboardButton(text="3 \u0433\u043e\u0434\u0430", callback_data="period:3y")],
-        [InlineKeyboardButton(text="\u0412\u0441\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f", callback_data="period:all")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def frequency_kb() -> InlineKeyboardMarkup:
-    buttons = [
-        [
-            InlineKeyboardButton(text="5 \u043c\u0438\u043d", callback_data="freq:5"),
-            InlineKeyboardButton(text="15 \u043c\u0438\u043d", callback_data="freq:15"),
-            InlineKeyboardButton(text="30 \u043c\u0438\u043d", callback_data="freq:30"),
-            InlineKeyboardButton(text="60 \u043c\u0438\u043d", callback_data="freq:60"),
-        ],
-        [
-            InlineKeyboardButton(text="2\u0447", callback_data="freq:120"),
-            InlineKeyboardButton(text="4\u0447", callback_data="freq:240"),
-            InlineKeyboardButton(text="8\u0447", callback_data="freq:480"),
-            InlineKeyboardButton(text="24\u0447", callback_data="freq:1440"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
 def emoji_kb() -> InlineKeyboardMarkup:
     emojis = ["\U0001f525", "\U0001f916", "\U0001f3ac", "\U0001f9e0", "\U0001f4a1", "\U0001f4da", "\U0001f3a8", "\U0001f4b0"]
     buttons = [
@@ -277,16 +246,6 @@ def folder_multi_kb(folders: list[dict], selected: set) -> InlineKeyboardMarkup:
             text=f"\u2705 Import selected ({len(selected)})",
             callback_data="fmulti_go")])
     buttons.append([InlineKeyboardButton(text="\u2b05\ufe0f Back", callback_data="src:add")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def folder_list_kb(folders: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard listing TG folders for import."""
-    buttons = []
-    for f in folders:
-        label = f"\U0001f4c1 {f['title']} ({len(f['peers'])} \u043a\u0430\u043d\u0430\u043b\u043e\u0432)"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"folder_import:{f['id']}")])
-    buttons.append([InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data="hub:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

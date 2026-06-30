@@ -153,10 +153,7 @@ async def admin_list_users(api_key: dict = Depends(verify_api_key)):
     from agent_memory_mcp.config import settings
     if api_key["telegram_id"] != settings.admin_telegram_id:
         raise HTTPException(403, "admin only")
-    from agent_memory_mcp.db import queries as db_q
-    from agent_memory_mcp.db.engine import async_engine
-    tg_ids = await db_q.list_active_telegram_sessions(async_engine)
-    return {"users": [{"telegram_id": t} for t in tg_ids]}
+    return await service.list_active_users()
 
 
 @router.post("/labels/classify")
