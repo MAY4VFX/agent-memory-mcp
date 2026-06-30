@@ -96,10 +96,13 @@ class MilvusStorage:
         """Upsert documents into collection. Returns count."""
         if not documents:
             return 0
-        # Truncate content to fit Milvus varchar(32768) limit
+        # Milvus varchar max_length counts BYTES, not chars; Cyrillic is 2 bytes
+        # per char, so a char-based slice overflows the 32768-byte limit. Truncate
+        # on the UTF-8 byte length (with margin), decoding back on a char boundary.
         for doc in documents:
-            if "content" in doc and doc["content"] and len(doc["content"]) > 32000:
-                doc["content"] = doc["content"][:32000]
+            c = doc.get("content")
+            if c and len(c.encode("utf-8")) > 32000:
+                doc["content"] = c.encode("utf-8")[:32000].decode("utf-8", "ignore")
         result = self._client.upsert(collection_name=COLLECTION_NAME, data=documents)
         count = result.get("upsert_count", len(documents))
         log.info("milvus_upsert", count=count)

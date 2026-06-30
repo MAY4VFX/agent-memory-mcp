@@ -113,7 +113,9 @@ async def classify_owner_chats(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.0,
-            max_tokens=2000,
+            # One assignment object per chat; a user with many chats easily
+            # exceeds 2000 tokens, which truncates the JSON and fails parsing.
+            max_tokens=8000,
         )
         assignments = result.get("assignments", []) or []
     except Exception:
