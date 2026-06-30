@@ -89,13 +89,20 @@ async def cmd_start(message: Message):
             "Press <b>📱 Connect Telegram</b> below to get started."
         )
 
-    await message.answer(
-        "🧠 <b>Agent Memory MCP</b>\n\n"
-        "Long-term memory for Telegram-native AI agents.\n\n"
-        "We turn your chats, channels, and folders into structured "
-        "persistent memory that any AI agent can use.\n\n"
-        + "\n".join(status_parts) + "\n\n"
-        "Use the buttons below to manage your account ⬇️",
+    # Send to General (no message_thread_id) so the persistent reply keyboard
+    # binds to the main view, not to whatever topic /start was pressed in. In
+    # forum (topics) mode message.answer() would inherit the source thread and
+    # the menu buttons would only ever appear inside that thread.
+    await message.bot.send_message(
+        chat_id=message.chat.id,
+        text=(
+            "🧠 <b>Agent Memory MCP</b>\n\n"
+            "Long-term memory for Telegram-native AI agents.\n\n"
+            "We turn your chats, channels, and folders into structured "
+            "persistent memory that any AI agent can use.\n\n"
+            + "\n".join(status_parts) + "\n\n"
+            "Use the buttons below to manage your account ⬇️"
+        ),
         reply_markup=main_menu_kb(telegram_connected=is_connected),
     )
 
@@ -678,7 +685,7 @@ async def btn_help(message: Message):
 
 # --- Text in General → create new topic thread ---
 
-@router.message(StateFilter(None), F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
+@router.message(_GENERAL, StateFilter(None), F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
 async def general_text_to_topic(message: Message, state: FSMContext):
     """User typed free text → create a new thread for agent chat.
 
