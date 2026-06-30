@@ -20,15 +20,43 @@ log = structlog.get_logger(__name__)
 
 COLLECTION_NAME = "telegram_messages"
 
+# Per-process cache of (uri, db) pairs already ensured, so we don't run an admin
+# list/create on every MilvusStorage() instantiation (it's created per request).
+_ensured_dbs: set[str] = set()
+
+
+def _ensure_database(uri: str, db: str) -> None:
+    """Create the Milvus database if it doesn't exist (idempotent, cached)."""
+    key = f"{uri}::{db}"
+    if key in _ensured_dbs:
+        return
+    admin = MilvusClient(uri=uri)
+    try:
+        if db not in admin.list_databases():
+            admin.create_database(db)
+    finally:
+        admin.close()
+    _ensured_dbs.add(key)
+
 
 class MilvusStorage:
     """Milvus vector storage for telegram messages."""
 
-    def __init__(self, host: str | None = None, port: int | None = None) -> None:
+    def __init__(
+        self, host: str | None = None, port: int | None = None, db_name: str | None = None
+    ) -> None:
         _host = host or settings.milvus_host
         _port = port or settings.milvus_port
-        self._client = MilvusClient(uri=f"http://{_host}:{_port}")
-        log.info("milvus_connected", host=_host, port=_port)
+        _db = db_name if db_name is not None else settings.milvus_db
+        uri = f"http://{_host}:{_port}"
+        # On a shared Milvus, isolate this project in its own database. Empty
+        # db => use the server default (back-compat / escape hatch).
+        if _db:
+            _ensure_database(uri, _db)
+            self._client = MilvusClient(uri=uri, db_name=_db)
+        else:
+            self._client = MilvusClient(uri=uri)
+        log.info("milvus_connected", host=_host, port=_port, db=_db or "default")
 
     # ------------------------------------------------------------------ schema
 

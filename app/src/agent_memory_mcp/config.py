@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # --- Milvus ---
     milvus_host: str = "amm-milvus-whraed-milvus-1"
     milvus_port: int = 19530
+    milvus_db: str = "db_amm"  # per-project DB on the shared Milvus; "" = default db
 
     # --- FalkorDB ---
     falkordb_host: str = "amm-falkordb-pwpx2g-falkordb-1"
