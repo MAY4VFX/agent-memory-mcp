@@ -29,6 +29,7 @@ from agent_memory_mcp.pipeline.components.embedder import BGEEmbedder
 from agent_memory_mcp.pipeline.components.metadata_enricher import MetadataEnricher
 from agent_memory_mcp.pipeline.components.noise_filter import NoiseFilter
 from agent_memory_mcp.pipeline.components.thread_builder import ThreadBuilder
+from agent_memory_mcp.gpu.manager import build_gpu_manager
 from agent_memory_mcp.pipeline.pipelines import _build_milvus_documents
 from agent_memory_mcp.storage.milvus_client import MilvusStorage
 
@@ -61,6 +62,17 @@ async def main() -> None:
 
     total_threads = 0
     total_vectors = 0
+
+    # Keep the embedding GPU container alive for the whole batch: reembed talks to
+    # the TEI directly, so without this the idle checker (this app's or another
+    # project's) stops it mid-run -> ConnectError. start_idle_checker=False so we
+    # don't compete with the long-lived app's stopper; the container still
+    # auto-stops after we finish.
+    _gpu = build_gpu_manager(start_idle_checker=False)
+    _hb = None
+    if _gpu:
+        await _gpu.ensure_running("embedding", settings.gpu_idle_timeout)
+        _hb = asyncio.create_task(_gpu._heartbeat("embedding", settings.gpu_idle_timeout))
 
     for domain in active_domains:
         domain_id = domain["id"]
@@ -110,6 +122,9 @@ async def main() -> None:
         # Upsert to Milvus
         milvus.upsert_documents(docs)
         log.info("reembed_domain_done", domain_id=str(domain_id), vectors=len(docs))
+
+    if _hb:
+        _hb.cancel()
 
     elapsed = time.time() - t0
     log.info("reembed_complete", threads=total_threads, vectors=total_vectors, elapsed_sec=round(elapsed, 1))

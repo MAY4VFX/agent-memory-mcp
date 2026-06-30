@@ -1,5 +1,13 @@
+# ⚠️ DEPRECATED — DO NOT DEPLOY.
+# AMM and tg_kb now share ONE Milvus (Dokploy project "shared-milvus", with
+# per-project databases db_amm / db_tgkb). Bringing this compose up spins a
+# SECOND Milvus coordinator on the bucket below; two coordinators on one bucket
+# each run their own GC and DELETE each other's objects — this caused real data
+# loss. Both services are gated behind a "disabled" profile, so `docker compose
+# up` is a no-op. Kept for reference only.
 services:
   etcd:
+    profiles: ["disabled"]
     restart: unless-stopped
     image: quay.io/coreos/etcd:v3.5.26
     environment:
@@ -23,6 +31,7 @@ services:
       - dokploy-network
 
   milvus:
+    profiles: ["disabled"]
     restart: unless-stopped
     image: milvusdb/milvus:v2.5.26
     command: ["milvus", "run", "standalone"]

@@ -10,6 +10,7 @@ so the idle checker won't stop a container that the *other* project just used.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from dataclasses import dataclass
@@ -347,6 +348,35 @@ class GpuServiceManager:
         self._idle_thread.start()
         log.info("gpu_idle_thread_spawned", idle_timeout=idle_timeout)
 
+    @contextlib.asynccontextmanager
+    async def keep_alive(self, name: str, idle_timeout: int | None = None):
+        """Keep a GPU service up for the whole duration of a job.
+
+        Ensures the container is running, then refreshes the local timer AND the
+        shared Redis touch on a heartbeat, so neither this process's nor another
+        project's idle checker can stop it mid-job. The container still auto-stops
+        idle_timeout after the context exits — on-demand behaviour is preserved.
+        Used by batch jobs (reembed) that talk to the TEI directly and would
+        otherwise be invisible to the idle checker.
+        """
+        idle_timeout = idle_timeout or getattr(self, "_idle_timeout", 300)
+        await self.ensure_running(name, idle_timeout)
+        task = asyncio.create_task(self._heartbeat(name, idle_timeout))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+
+    async def _heartbeat(self, name: str, idle_timeout: int) -> None:
+        while True:
+            await asyncio.sleep(max(1, idle_timeout // 3))
+            svc = self._services.get(name)
+            if svc:
+                svc.touch()
+                self._redis_touch(name, idle_timeout)
+
     async def stop_all(self) -> None:
         self._running = False
         for name in list(self._services):
@@ -370,3 +400,47 @@ def get_gpu_manager() -> GpuServiceManager | None:
 def set_gpu_manager(mgr: GpuServiceManager) -> None:
     global _manager
     _manager = mgr
+
+
+def build_gpu_manager(start_idle_checker: bool = True) -> "GpuServiceManager | None":
+    """Create + register the GPU manager from settings and set it as the global.
+
+    start_idle_checker=True (the long-lived app) also starts the idle-stopper
+    thread. start_idle_checker=False (standalone batch jobs like reembed) wires
+    on-demand start + keep_alive WITHOUT a stopper competing with the app.
+    Returns None if GPU management is disabled or init fails.
+    """
+    from agent_memory_mcp.config import settings
+
+    if not settings.gpu_manager_enabled:
+        return None
+    try:
+        mgr = GpuServiceManager(
+            docker_host=settings.gpu_docker_host,
+            redis_url=settings.gpu_coord_redis_url,
+            project_id=settings.gpu_project_id,
+        )
+        mgr.register(GpuService(
+            name="embedding",
+            container_name=settings.gpu_embedding_container,
+            health_url=f"{settings.embedding_url}/health",
+            health_timeout=settings.gpu_startup_timeout,
+        ))
+        mgr.register(GpuService(
+            name="reranker",
+            container_name=settings.gpu_reranker_container,
+            health_url=f"{settings.reranker_url}/health",
+            health_timeout=settings.gpu_startup_timeout,
+        ))
+        set_gpu_manager(mgr)
+        if start_idle_checker:
+            mgr.start_idle_checker_thread(idle_timeout=settings.gpu_idle_timeout)
+        log.info(
+            "gpu_manager_started",
+            idle_timeout=settings.gpu_idle_timeout,
+            idle_checker=start_idle_checker,
+        )
+        return mgr
+    except Exception:
+        log.exception("gpu_manager_init_failed")
+        return None
