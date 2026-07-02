@@ -3,7 +3,10 @@ services:
     restart: unless-stopped
     image: falkordb/falkordb:v4.16.3
     environment:
-      - REDIS_ARGS=--requirepass ${FALKORDB_PASSWORD}
+      # --dir /data makes Redis persist dump.rdb onto the mounted volume.
+      # Without it FalkorDB writes to /var/lib/falkordb/data (the ephemeral
+      # container layer) and every container recreate loses all graphs.
+      - REDIS_ARGS=--requirepass ${FALKORDB_PASSWORD} --dir /data
     volumes:
       - falkordb_data:/data
     healthcheck:
