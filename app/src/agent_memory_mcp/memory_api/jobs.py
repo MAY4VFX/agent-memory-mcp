@@ -1,14 +1,21 @@
-"""Async job manager for long-running operations (digest, decisions, etc.)."""
+"""Async job manager for long-running operations (digest, decisions, etc.).
+
+Backed by the `jobs` table so results survive restarts and are readable across
+instances. Ownership is enforced in get_job so job_ids can't leak other users'
+results (issue #18 #8/#4).
+"""
 
 from __future__ import annotations
 
 import asyncio
-import time
+import json
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine
+from typing import Any, Coroutine
 
 import structlog
+from sqlalchemy import text
+
+from agent_memory_mcp.db.engine import async_engine
 
 log = structlog.get_logger(__name__)
 
@@ -16,73 +23,72 @@ log = structlog.get_logger(__name__)
 _JOB_TTL = 3600
 
 
-@dataclass
-class Job:
-    id: str
-    owner_id: int = 0
-    status: str = "running"  # running | completed | failed
-    result: Any = None
-    error: str | None = None
-    created_at: float = field(default_factory=time.monotonic)
-    completed_at: float | None = None
-
-
-# In-memory store (sufficient for single-instance MVP)
-_jobs: dict[str, Job] = {}
-
-
-def create_job(coro: Coroutine, owner_id: int = 0) -> str:
-    """Launch async job, return job_id immediately."""
+async def create_job(coro: Coroutine, owner_id: int = 0) -> str:
+    """Persist a job row, launch the coroutine in the background, return job_id."""
     job_id = f"job_{uuid.uuid4().hex[:12]}"
-    job = Job(id=job_id, owner_id=owner_id)
-    _jobs[job_id] = job
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO jobs (job_id, owner_id, status) VALUES (:id, :oid, 'running')"),
+            {"id": job_id, "oid": owner_id},
+        )
 
     async def _run():
         try:
             result = await coro
-            job.status = "completed"
-            job.result = result
-            job.completed_at = time.monotonic()
+            async with async_engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE jobs SET status='completed', result=CAST(:r AS jsonb), completed_at=now() WHERE job_id=:id"),
+                    {"r": json.dumps(result, default=str), "id": job_id},
+                )
             log.info("job_completed", job_id=job_id)
         except Exception as e:
-            job.status = "failed"
-            job.error = str(e)[:500]
-            job.completed_at = time.monotonic()
+            async with async_engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE jobs SET status='failed', error=:e, completed_at=now() WHERE job_id=:id"),
+                    {"e": str(e)[:500], "id": job_id},
+                )
             log.warning("job_failed", job_id=job_id, error=str(e)[:200])
 
     asyncio.create_task(_run(), name=f"job_{job_id}")
-    _cleanup_old_jobs()
+    await _cleanup_old_jobs()
     return job_id
 
 
-def get_job(job_id: str, owner_id: int | None = None) -> dict | None:
+async def get_job(job_id: str, owner_id: int | None = None) -> dict | None:
     """Get job status and result.
 
     If owner_id is given, the job must belong to that owner — otherwise return
     None (caller surfaces 404), so job_ids can't be used to read others' results.
     """
-    job = _jobs.get(job_id)
-    if not job:
+    async with async_engine.begin() as conn:
+        row = (await conn.execute(
+            text("""
+                SELECT owner_id, status, result, error,
+                       EXTRACT(EPOCH FROM (now() - created_at)) AS elapsed
+                FROM jobs WHERE job_id = :id
+            """),
+            {"id": job_id},
+        )).mappings().first()
+    if not row:
         return None
-    if owner_id is not None and job.owner_id != owner_id:
+    if owner_id is not None and row["owner_id"] != owner_id:
         return None
-    result = {
-        "job_id": job.id,
-        "status": job.status,
-    }
-    if job.status == "completed":
-        result["result"] = job.result
-    elif job.status == "failed":
-        result["error"] = job.error
-    elif job.status == "running":
-        elapsed = time.monotonic() - job.created_at
-        result["elapsed_seconds"] = int(elapsed)
-    return result
+
+    out: dict[str, Any] = {"job_id": job_id, "status": row["status"]}
+    if row["status"] == "completed":
+        res = row["result"]
+        out["result"] = json.loads(res) if isinstance(res, str) else res
+    elif row["status"] == "failed":
+        out["error"] = row["error"]
+    elif row["status"] == "running":
+        out["elapsed_seconds"] = int(row["elapsed"] or 0)
+    return out
 
 
-def _cleanup_old_jobs():
+async def _cleanup_old_jobs() -> None:
     """Remove jobs older than TTL."""
-    now = time.monotonic()
-    expired = [jid for jid, j in _jobs.items() if now - j.created_at > _JOB_TTL]
-    for jid in expired:
-        del _jobs[jid]
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM jobs WHERE created_at < now() - make_interval(secs => :ttl)"),
+            {"ttl": _JOB_TTL},
+        )

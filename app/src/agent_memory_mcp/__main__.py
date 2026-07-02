@@ -105,6 +105,10 @@ async def main() -> None:
     if collector:
         asyncio.create_task(collector.get_dialog_filters(), name="warmup_folders")
 
+    # Resume TON top-ups that were mid-flight when the process last stopped.
+    from agent_memory_mcp.bot.handlers.wallet import resume_pending_payments
+    asyncio.create_task(resume_pending_payments(bot), name="resume_pending_payments")
+
     # Start scheduler with shared collector and bot (for digest)
     scheduler = SyncScheduler(collector=collector, bot=bot)
     scheduler_task = asyncio.create_task(scheduler.start())

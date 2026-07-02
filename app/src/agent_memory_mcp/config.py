@@ -99,6 +99,11 @@ class Settings(BaseSettings):
 
     # --- API Server ---
     api_port: int = 8002
+    # Comma-separated CORS origins. Bearer-auth API (no cookies), so this is
+    # defense-in-depth. Native MCP clients (Claude Code/Cursor desktop) are
+    # server-side and need no CORS; only browser MCP clients do. Set "*" to
+    # allow all, or add origins via the CORS_ALLOW_ORIGINS env var.
+    cors_allow_origins: str = "https://claude.ai,https://claude.com,https://cursor.com,https://www.cursor.com"
 
     # --- MCP ---
     run_mcp: bool = True

@@ -240,7 +240,7 @@ async def get_digest(
         scope=req.scope,
         period=req.period,
     )
-    job_id = create_job(coro, owner_id=api_key["telegram_id"])
+    job_id = await create_job(coro, owner_id=api_key["telegram_id"])
     return {"job_id": job_id, "status": "running", "points_used": CREDIT_COSTS["digest"]}
 
 
@@ -256,7 +256,7 @@ async def get_decisions(
         scope=req.scope,
         topic=req.topic,
     )
-    job_id = create_job(coro, owner_id=api_key["telegram_id"])
+    job_id = await create_job(coro, owner_id=api_key["telegram_id"])
     return {"job_id": job_id, "status": "running", "points_used": CREDIT_COSTS["decisions"]}
 
 
@@ -265,7 +265,7 @@ async def get_job_status(job_id: str, api_key: dict = Depends(verify_api_key)):
     """Poll job status. Returns result when completed."""
     from agent_memory_mcp.memory_api.jobs import get_job
     from fastapi import HTTPException
-    result = get_job(job_id, owner_id=api_key["telegram_id"])
+    result = await get_job(job_id, owner_id=api_key["telegram_id"])
     if not result:
         raise HTTPException(404, "Job not found or expired")
     return result

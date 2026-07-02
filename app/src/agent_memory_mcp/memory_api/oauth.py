@@ -14,21 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import secrets
-import time
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import text
 
 from agent_memory_mcp.config import settings
+from agent_memory_mcp.db.engine import async_engine
 
 router = APIRouter()
-
-# Temporary storage for auth codes (code → (api_key, expires, challenge, method))
-_auth_codes: dict[str, tuple[str, float, str, str]] = {}
-# Registered clients
-_clients: dict[str, dict] = {}
 
 AUTH_CODE_TTL = 300  # 5 minutes
 
@@ -38,17 +35,47 @@ def _force_https(url: str) -> str:
     return url.replace("http://", "https://", 1)
 
 
-def _redirect_uri_allowed(client_id: str, redirect_uri: str) -> bool:
+# --- Persistent OAuth state (Postgres) — survives restarts / multiple instances.
+
+async def _save_client(client_id: str, client_secret: str, redirect_uris: list, client_name: str) -> None:
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text("""
+                INSERT INTO oauth_clients (client_id, client_secret, redirect_uris, client_name)
+                VALUES (:cid, :sec, CAST(:uris AS jsonb), :name)
+                ON CONFLICT (client_id) DO UPDATE
+                  SET client_secret = EXCLUDED.client_secret,
+                      redirect_uris = EXCLUDED.redirect_uris,
+                      client_name   = EXCLUDED.client_name
+            """),
+            {"cid": client_id, "sec": client_secret, "uris": json.dumps(redirect_uris), "name": client_name},
+        )
+
+
+async def _get_client(client_id: str) -> dict | None:
+    if not client_id:
+        return None
+    async with async_engine.begin() as conn:
+        row = (await conn.execute(
+            text("SELECT client_id, redirect_uris, client_name FROM oauth_clients WHERE client_id = :cid"),
+            {"cid": client_id},
+        )).mappings().first()
+    return dict(row) if row else None
+
+
+async def _redirect_uri_allowed(client_id: str, redirect_uri: str) -> bool:
     """Check redirect_uri against the client's registered URIs (RFC 6749 §3.1.2).
 
     Exact match required. Per RFC 8252, loopback redirect URIs may use a dynamic
     port, so for 127.0.0.1/localhost/::1 we match on scheme+host+path and ignore
     the port. Everything else must match exactly — this closes the open-redirect.
     """
-    client = _clients.get(client_id)
+    client = await _get_client(client_id)
     if not client:
         return False
     registered = client.get("redirect_uris") or []
+    if isinstance(registered, str):
+        registered = json.loads(registered)
     if redirect_uri in registered:
         return True
     try:
@@ -62,6 +89,31 @@ def _redirect_uri_allowed(client_id: str, redirect_uri: str) -> bool:
         if (r.scheme, r.hostname, r.path) == (want.scheme, want.hostname, want.path):
             return True
     return False
+
+
+async def _save_auth_code(code: str, api_key: str, ttl: int, challenge: str, method: str) -> None:
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text("""
+                INSERT INTO oauth_auth_codes (code, api_key, expires_at, code_challenge, code_challenge_method)
+                VALUES (:code, :key, now() + make_interval(secs => :ttl), :ch, :cm)
+            """),
+            {"code": code, "key": api_key, "ttl": ttl, "ch": challenge, "cm": method},
+        )
+
+
+async def _pop_auth_code(code: str) -> dict | None:
+    """Fetch and delete an auth code atomically. Returns None if unknown/expired."""
+    async with async_engine.begin() as conn:
+        row = (await conn.execute(
+            text("""
+                DELETE FROM oauth_auth_codes WHERE code = :code
+                RETURNING api_key, expires_at, code_challenge, code_challenge_method,
+                          (expires_at < now()) AS expired
+            """),
+            {"code": code},
+        )).mappings().first()
+    return dict(row) if row else None
 
 
 def _build_metadata(base: str) -> dict:
@@ -121,12 +173,10 @@ async def oauth_register(request: Request):
     body = await request.json()
     client_id = f"client_{secrets.token_hex(8)}"
     client_secret = secrets.token_hex(16)
-    _clients[client_id] = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uris": body.get("redirect_uris", []),
-        "client_name": body.get("client_name", "MCP Client"),
-    }
+    await _save_client(
+        client_id, client_secret,
+        body.get("redirect_uris", []), body.get("client_name", "MCP Client"),
+    )
     return JSONResponse({
         "client_id": client_id,
         "client_secret": client_secret,
@@ -148,7 +198,7 @@ async def oauth_authorize_page(
     """Authorization page — user enters their API key."""
     # Reject unregistered/mismatched redirect_uri before rendering the form —
     # never echo an attacker-controlled redirect target into a working form.
-    if not _redirect_uri_allowed(client_id, redirect_uri):
+    if not await _redirect_uri_allowed(client_id, redirect_uri):
         return HTMLResponse(
             "<h2>Invalid client or redirect_uri.</h2>"
             "<p>This authorization request could not be verified.</p>",
@@ -247,7 +297,7 @@ async def oauth_authorize_submit(request: Request):
     code_challenge_method = form.get("code_challenge_method", "")
 
     # Re-validate redirect_uri on submit — the form fields are attacker-controllable.
-    if not _redirect_uri_allowed(client_id, redirect_uri):
+    if not await _redirect_uri_allowed(client_id, redirect_uri):
         return HTMLResponse(
             "<h2>Invalid client or redirect_uri.</h2>", status_code=400,
         )
@@ -273,7 +323,7 @@ async def oauth_authorize_submit(request: Request):
 
     # Generate auth code
     auth_code = secrets.token_urlsafe(32)
-    _auth_codes[auth_code] = (api_key, time.time() + AUTH_CODE_TTL, code_challenge, code_challenge_method)
+    await _save_auth_code(auth_code, api_key, AUTH_CODE_TTL, code_challenge, code_challenge_method)
 
     # Redirect back to client
     sep = "&" if "?" in redirect_uri else "?"
@@ -302,14 +352,16 @@ async def oauth_token(request: Request):
     if grant_type != "authorization_code":
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
-    if code not in _auth_codes:
+    # Fetch-and-delete atomically: an auth code is single-use.
+    code_row = await _pop_auth_code(code)
+    if not code_row:
         return JSONResponse({"error": "invalid_grant", "error_description": "Invalid or expired code"}, status_code=400)
-
-    api_key, expires, challenge, challenge_method = _auth_codes[code]
-
-    if time.time() > expires:
-        del _auth_codes[code]
+    if code_row["expired"]:
         return JSONResponse({"error": "invalid_grant", "error_description": "Code expired"}, status_code=400)
+
+    api_key = code_row["api_key"]
+    challenge = code_row["code_challenge"]
+    challenge_method = code_row["code_challenge_method"]
 
     # PKCE: if a challenge was bound to the code at /authorize, the verifier is
     # MANDATORY on exchange (RFC 7636). A stolen code without the verifier fails.
@@ -329,9 +381,6 @@ async def oauth_token(request: Request):
             return JSONResponse({"error": "invalid_request", "error_description": "unsupported code_challenge_method"}, status_code=400)
         if not ok:
             return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
-
-    # Clean up used code
-    del _auth_codes[code]
 
     # The access token IS the API key — MCP client will send it as Bearer token
     return JSONResponse({
