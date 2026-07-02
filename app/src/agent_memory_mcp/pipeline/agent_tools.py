@@ -561,7 +561,9 @@ async def _tool_graph_query(args: dict, ctx: AgentContext) -> str:
     # Execute with 1 retry on error
     for attempt in range(2):
         try:
-            rows = await ctx.graph.execute_cypher(cypher, {"domain_id": ctx.domain_id})
+            rows = await ctx.graph.execute_cypher(
+                cypher, ctx.domain_id, params={"domain_id": ctx.domain_id}
+            )
             break
         except Exception as exc:
             if attempt == 0:

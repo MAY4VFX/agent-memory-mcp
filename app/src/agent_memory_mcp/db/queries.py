@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, insert, or_, select, text, update
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -327,7 +327,7 @@ async def get_recent_messages(
         select(messages)
         .where(
             messages.c.domain_id == domain_id,
-            messages.c.msg_date >= func.now() - text(f"interval '{days} days'"),
+            messages.c.msg_date >= func.now() - func.make_interval(0, 0, 0, days),
             messages.c.is_noise.is_(False),
         )
         .order_by(messages.c.msg_date.desc())
@@ -358,7 +358,7 @@ async def get_recent_messages_for_domains(
         select(messages, rn)
         .where(
             messages.c.domain_id.in_(domain_ids),
-            messages.c.msg_date >= func.now() - text(f"interval '{days} days'"),
+            messages.c.msg_date >= func.now() - func.make_interval(0, 0, 0, days),
             messages.c.is_noise.is_(False),
         )
         .subquery()

@@ -13,8 +13,10 @@ Flow (as seen by Claude Code / Cursor):
 from __future__ import annotations
 
 import hashlib
+import html
 import secrets
 import time
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -23,8 +25,8 @@ from agent_memory_mcp.config import settings
 
 router = APIRouter()
 
-# Temporary storage for auth codes (code → api_key, expires)
-_auth_codes: dict[str, tuple[str, float]] = {}
+# Temporary storage for auth codes (code → (api_key, expires, challenge, method))
+_auth_codes: dict[str, tuple[str, float, str, str]] = {}
 # Registered clients
 _clients: dict[str, dict] = {}
 
@@ -34,6 +36,32 @@ AUTH_CODE_TTL = 300  # 5 minutes
 def _force_https(url: str) -> str:
     """Force HTTPS — server is behind Cloudflare/Nginx reverse proxy."""
     return url.replace("http://", "https://", 1)
+
+
+def _redirect_uri_allowed(client_id: str, redirect_uri: str) -> bool:
+    """Check redirect_uri against the client's registered URIs (RFC 6749 §3.1.2).
+
+    Exact match required. Per RFC 8252, loopback redirect URIs may use a dynamic
+    port, so for 127.0.0.1/localhost/::1 we match on scheme+host+path and ignore
+    the port. Everything else must match exactly — this closes the open-redirect.
+    """
+    client = _clients.get(client_id)
+    if not client:
+        return False
+    registered = client.get("redirect_uris") or []
+    if redirect_uri in registered:
+        return True
+    try:
+        want = urlparse(redirect_uri)
+    except Exception:
+        return False
+    if want.hostname not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    for reg in registered:
+        r = urlparse(reg)
+        if (r.scheme, r.hostname, r.path) == (want.scheme, want.hostname, want.path):
+            return True
+    return False
 
 
 def _build_metadata(base: str) -> dict:
@@ -118,7 +146,25 @@ async def oauth_authorize_page(
     response_type: str = "code",
 ):
     """Authorization page — user enters their API key."""
-    html = f"""<!DOCTYPE html>
+    # Reject unregistered/mismatched redirect_uri before rendering the form —
+    # never echo an attacker-controlled redirect target into a working form.
+    if not _redirect_uri_allowed(client_id, redirect_uri):
+        return HTMLResponse(
+            "<h2>Invalid client or redirect_uri.</h2>"
+            "<p>This authorization request could not be verified.</p>",
+            status_code=400,
+        )
+
+    # Escape every user-controlled value before interpolating into HTML (XSS).
+    e_client_id = html.escape(client_id, quote=True)
+    e_redirect_uri = html.escape(redirect_uri, quote=True)
+    e_state = html.escape(state, quote=True)
+    e_code_challenge = html.escape(code_challenge, quote=True)
+    e_code_challenge_method = html.escape(code_challenge_method, quote=True)
+    e_bot_url = html.escape(settings.bot_url, quote=True)
+    e_bot_username = html.escape(settings.bot_username, quote=True)
+
+    page = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -166,11 +212,11 @@ async def oauth_authorize_page(
         <p class="subtitle">Enter your API key to connect memory to your AI agent.</p>
 
         <form method="POST" action="/oauth/authorize">
-            <input type="hidden" name="client_id" value="{client_id}">
-            <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-            <input type="hidden" name="state" value="{state}">
-            <input type="hidden" name="code_challenge" value="{code_challenge}">
-            <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+            <input type="hidden" name="client_id" value="{e_client_id}">
+            <input type="hidden" name="redirect_uri" value="{e_redirect_uri}">
+            <input type="hidden" name="state" value="{e_state}">
+            <input type="hidden" name="code_challenge" value="{e_code_challenge}">
+            <input type="hidden" name="code_challenge_method" value="{e_code_challenge_method}">
 
             <label for="api_key">API Key</label>
             <input type="text" id="api_key" name="api_key"
@@ -181,12 +227,12 @@ async def oauth_authorize_page(
 
         <p class="hint">
             Don't have a key? Get one from
-            <a href="{settings.bot_url}" target="_blank">@{settings.bot_username}</a>
+            <a href="{e_bot_url}" target="_blank">@{e_bot_username}</a>
         </p>
     </div>
 </body>
 </html>"""
-    return HTMLResponse(html)
+    return HTMLResponse(page)
 
 
 @router.post("/oauth/authorize")
@@ -194,10 +240,17 @@ async def oauth_authorize_submit(request: Request):
     """Handle API key submission — generate auth code and redirect."""
     form = await request.form()
     api_key = form.get("api_key", "").strip()
+    client_id = form.get("client_id", "")
     redirect_uri = form.get("redirect_uri", "")
     state = form.get("state", "")
     code_challenge = form.get("code_challenge", "")
     code_challenge_method = form.get("code_challenge_method", "")
+
+    # Re-validate redirect_uri on submit — the form fields are attacker-controllable.
+    if not _redirect_uri_allowed(client_id, redirect_uri):
+        return HTMLResponse(
+            "<h2>Invalid client or redirect_uri.</h2>", status_code=400,
+        )
 
     if not api_key or not api_key.startswith("amk_"):
         return HTMLResponse(
@@ -258,15 +311,24 @@ async def oauth_token(request: Request):
         del _auth_codes[code]
         return JSONResponse({"error": "invalid_grant", "error_description": "Code expired"}, status_code=400)
 
-    # Verify PKCE if challenge was provided
-    if challenge and code_verifier:
-        if challenge_method == "S256":
+    # PKCE: if a challenge was bound to the code at /authorize, the verifier is
+    # MANDATORY on exchange (RFC 7636). A stolen code without the verifier fails.
+    if challenge:
+        if not code_verifier:
+            return JSONResponse({"error": "invalid_grant", "error_description": "code_verifier required"}, status_code=400)
+        method = challenge_method or "plain"
+        if method == "S256":
             import base64
             computed = base64.urlsafe_b64encode(
                 hashlib.sha256(code_verifier.encode()).digest()
             ).rstrip(b"=").decode()
-            if computed != challenge:
-                return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
+            ok = secrets.compare_digest(computed, challenge)
+        elif method == "plain":
+            ok = secrets.compare_digest(code_verifier, challenge)
+        else:
+            return JSONResponse({"error": "invalid_request", "error_description": "unsupported code_challenge_method"}, status_code=400)
+        if not ok:
+            return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
 
     # Clean up used code
     del _auth_codes[code]
@@ -275,5 +337,5 @@ async def oauth_token(request: Request):
     return JSONResponse({
         "access_token": api_key,
         "token_type": "bearer",
-        "expires_in": 86400 * 365,  # 1 year (effectively never expires)
+        "expires_in": 86400 * 30,  # 30 days
     })

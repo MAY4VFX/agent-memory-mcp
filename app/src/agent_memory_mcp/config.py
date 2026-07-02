@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -21,12 +20,9 @@ class Settings(BaseSettings):
     telegram_session: str = ""
 
     # --- PostgreSQL ---
-    database_url: str = Field(
-        default="postgresql+asyncpg://amm_user:***REMOVED***@amm-postgres-rwqeha:5432/agent_memory_mcp",
-    )
-    database_url_sync: str = Field(
-        default="postgresql://amm_user:***REMOVED***@amm-postgres-rwqeha:5432/agent_memory_mcp",
-    )
+    # No defaults — credentials MUST come from the environment (Dokploy).
+    database_url: str
+    database_url_sync: str
 
     # --- Milvus ---
     milvus_host: str = "amm-milvus-whraed-milvus-1"
@@ -36,7 +32,7 @@ class Settings(BaseSettings):
     # --- FalkorDB ---
     falkordb_host: str = "amm-falkordb-pwpx2g-falkordb-1"
     falkordb_port: int = 6379
-    falkordb_password: str = "***REMOVED***"
+    falkordb_password: str  # required — no default, comes from environment
     falkordb_graph: str = "agent_memory_mcp"
 
     # --- Embedding (TEI) ---

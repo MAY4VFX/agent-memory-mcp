@@ -57,6 +57,42 @@ async def get_api_key_by_hash(engine: AsyncEngine, key_hash: str) -> dict | None
         return dict(r) if r else None
 
 
+# Shared cache for validated Bearer tokens: key_hash → (record, monotonic_ts).
+# Reused by the MCP auth middleware and the MCP tool layer so a single request
+# doesn't hit the DB twice.
+import time as _time  # noqa: E402
+
+_key_cache: dict[str, tuple[dict, float]] = {}
+_KEY_CACHE_TTL = 300  # seconds
+
+
+async def validate_bearer_token(auth_header: str) -> dict | None:
+    """Validate an ``Authorization: Bearer <key>`` header.
+
+    Returns the active api_key record, or None if the header is missing/malformed,
+    the key has the wrong prefix, is unknown, or is deactivated. This is the single
+    source of truth for MCP Bearer auth (middleware + tool layer).
+    """
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.removeprefix("Bearer ").strip()
+    if not token.startswith("amk_"):
+        return None
+
+    key_hash = _hash_key(token)
+    cached = _key_cache.get(key_hash)
+    if cached and _time.monotonic() - cached[1] < _KEY_CACHE_TTL:
+        return cached[0]
+    _key_cache.pop(key_hash, None)
+
+    record = await get_api_key_by_hash(async_engine, key_hash)
+    if not record or not record["is_active"]:
+        return None
+
+    _key_cache[key_hash] = (record, _time.monotonic())
+    return record
+
+
 async def create_api_key_for_user(
     engine: AsyncEngine, telegram_id: int, name: str = "default", bonus_credits: int = 0,
 ) -> tuple[str, dict]:
@@ -168,6 +204,19 @@ async def topup_credits(engine: AsyncEngine, api_key_id: UUID, amount: int, ton_
             {"tid": tid},
         )
         balance = row.scalar() or 0
+
+        # Idempotency: never credit the same on-chain TX twice. The FOR UPDATE
+        # above serializes concurrent top-ups for this user; the partial UNIQUE
+        # index on ton_tx_hash (migration 016) is the ultimate backstop.
+        if ton_tx_hash:
+            dup = await conn.execute(
+                text("SELECT 1 FROM credit_transactions WHERE ton_tx_hash = :tx LIMIT 1"),
+                {"tx": ton_tx_hash},
+            )
+            if dup.first():
+                log.warning("ton_tx_already_credited", tx_hash=ton_tx_hash, telegram_id=tid)
+                return balance
+
         new_balance = balance + amount
         await conn.execute(
             text("UPDATE users SET points_balance = :nb WHERE telegram_id = :tid"),

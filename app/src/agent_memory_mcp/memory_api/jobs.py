@@ -19,6 +19,7 @@ _JOB_TTL = 3600
 @dataclass
 class Job:
     id: str
+    owner_id: int = 0
     status: str = "running"  # running | completed | failed
     result: Any = None
     error: str | None = None
@@ -33,7 +34,7 @@ _jobs: dict[str, Job] = {}
 def create_job(coro: Coroutine, owner_id: int = 0) -> str:
     """Launch async job, return job_id immediately."""
     job_id = f"job_{uuid.uuid4().hex[:12]}"
-    job = Job(id=job_id)
+    job = Job(id=job_id, owner_id=owner_id)
     _jobs[job_id] = job
 
     async def _run():
@@ -54,10 +55,16 @@ def create_job(coro: Coroutine, owner_id: int = 0) -> str:
     return job_id
 
 
-def get_job(job_id: str) -> dict | None:
-    """Get job status and result."""
+def get_job(job_id: str, owner_id: int | None = None) -> dict | None:
+    """Get job status and result.
+
+    If owner_id is given, the job must belong to that owner — otherwise return
+    None (caller surfaces 404), so job_ids can't be used to read others' results.
+    """
     job = _jobs.get(job_id)
     if not job:
+        return None
+    if owner_id is not None and job.owner_id != owner_id:
         return None
     result = {
         "job_id": job.id,

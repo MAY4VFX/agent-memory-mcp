@@ -55,30 +55,19 @@ def create_api_app() -> FastAPI:
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Allow GET on /mcp/ root (SSE connection setup)
-        if request.method == "GET":
-            # Check auth on GET too
-            auth = request.headers.get("authorization", "")
-            if not auth.startswith("Bearer "):
-                return JSONResponse(
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
-                    content={
-                        "error": "unauthorized",
-                        "error_description": f"Bearer token required. Get your API key at {settings.bot_url}",
-                    },
-                )
-            return await call_next(request)
+        # All other /mcp/ methods (GET for SSE setup, POST for tool calls)
+        # require a *valid* API key — not merely a well-formed header.
+        from agent_memory_mcp.memory_api.auth import validate_bearer_token
 
-        # POST /mcp/ — main MCP requests
         auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer ") or len(auth) < 15:
+        key_record = await validate_bearer_token(auth)
+        if key_record is None:
             return JSONResponse(
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
                 content={
                     "error": "unauthorized",
-                    "error_description": f"Bearer token required. Get your API key at {settings.bot_url}",
+                    "error_description": f"Valid Bearer API key required. Get your API key at {settings.bot_url}",
                 },
             )
 

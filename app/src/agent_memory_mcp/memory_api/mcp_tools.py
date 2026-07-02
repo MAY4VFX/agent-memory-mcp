@@ -10,7 +10,6 @@ Auth flow:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 
 import structlog
@@ -18,7 +17,6 @@ from fastmcp import FastMCP, Context
 
 from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.memory_api.service import ScopeNotFound
-from agent_memory_mcp.memory_api.auth import get_api_key_by_hash, CREDIT_COSTS
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db.engine import async_engine
 
@@ -50,70 +48,33 @@ mcp = FastMCP(
     ),
 )
 
-# Cache: key_hash → (api_key record, timestamp) — 5 min TTL
-import time as _time
-_key_cache: dict[str, tuple[dict, float]] = {}
-_KEY_CACHE_TTL = 300
-
-
 async def _resolve_owner(ctx: Context | None) -> int:
-    """Extract owner_id from the Bearer token (API key) in MCP request."""
+    """Extract owner_id from the Bearer token (API key) in the MCP request.
+
+    Raises PermissionError if no valid key is present. The auth middleware
+    (app.py) already rejects unauthenticated /mcp requests, so this is
+    defense-in-depth — never fall back to an admin identity.
+    """
     key = await _resolve_api_key(ctx)
     if key:
         return key["telegram_id"]
-    # No key found — check middleware auth (Bearer was validated there already)
-    # The middleware in app.py already rejects unauthorized requests with 401,
-    # so if we get here, there's an auth header but we can't parse it.
-    # Last resort: read from the HTTP request directly
-    try:
-        from fastmcp.server.dependencies import get_http_request
-        request = get_http_request()
-        auth = request.headers.get("authorization", "")
-        token = auth.removeprefix("Bearer ").strip()
-        if token:
-            # Try direct DB lookup
-            key_hash = hashlib.sha256(token.encode()).hexdigest()
-            api_key = await get_api_key_by_hash(async_engine, key_hash)
-            if api_key and api_key["is_active"]:
-                _key_cache[key_hash] = (api_key, _time.monotonic())
-                return api_key["telegram_id"]
-    except Exception:
-        pass
     log.warning("resolve_owner_failed_no_key")
-    from agent_memory_mcp.config import settings
-    return settings.admin_telegram_id
+    raise PermissionError("Unauthorized: valid API key required")
 
 
 async def _resolve_api_key(ctx: Context | None) -> dict | None:
-    """Get full API key record from Bearer token."""
-    api_key_raw = None
+    """Get full API key record from the Bearer token via the shared validator."""
+    from agent_memory_mcp.memory_api.auth import validate_bearer_token
+
     try:
         from fastmcp.server.dependencies import get_http_request
         request = get_http_request()
         auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            api_key_raw = auth_header.removeprefix("Bearer ").strip()
     except Exception as e:
         log.debug("get_http_request_failed", error=str(e))
-
-    if not api_key_raw:
-        log.debug("no_api_key_in_request")
         return None
 
-    key_hash = hashlib.sha256(api_key_raw.encode()).hexdigest()
-
-    if key_hash in _key_cache:
-        cached, ts = _key_cache[key_hash]
-        if _time.monotonic() - ts < _KEY_CACHE_TTL:
-            return cached
-        del _key_cache[key_hash]
-
-    api_key = await get_api_key_by_hash(async_engine, key_hash)
-    if not api_key or not api_key["is_active"]:
-        return None
-
-    _key_cache[key_hash] = (api_key, _time.monotonic())
-    return api_key
+    return await validate_bearer_token(auth_header)
 
 
 def _admin_id() -> int:
@@ -127,8 +88,8 @@ async def _charge(ctx: Context | None, credits: int, endpoint: str) -> None:
         return
     key = await _resolve_api_key(ctx)
     if not key:
-        log.warning("charge_skipped_no_key", endpoint=endpoint, credits=credits)
-        return
+        log.warning("charge_denied_no_key", endpoint=endpoint, credits=credits)
+        raise PermissionError("Unauthorized: valid API key required")
     # Admin is exempt from billing
     if key.get("telegram_id") == _admin_id():
         return
@@ -607,13 +568,16 @@ async def graph_query(question: str, scope: str | None = None, ctx: Context = No
     if not domain_ids:
         return _ok({"results": [], "message": "No sources"})
 
-    from agent_memory_mcp.storage.falkordb_client import FalkorDBStorage
+    from agent_memory_mcp.storage.falkordb_client import FalkorDBStorage, graph_name_for
     from agent_memory_mcp.llm.client import llm_call
     from agent_memory_mcp.config import settings
     import re
 
     graph = FalkorDBStorage()
-    domain_id_str = str(domain_ids[0])
+    # Confine the whole query to this one tenant's isolated graph. Even if the
+    # LLM emits an unfiltered MATCH, it can only see this domain's graph.
+    domain_id = domain_ids[0]
+    graph_name = graph_name_for(domain_id)
 
     # Get schema for context
     schema = await db_q.get_active_schema(async_engine, domain_ids[0])
@@ -632,7 +596,7 @@ async def graph_query(question: str, scope: str | None = None, ctx: Context = No
         cypher = await llm_call(
             model=settings.llm_tier1_model,
             messages=[
-                {"role": "system", "content": f"Convert to Cypher for FalkorDB. Graph name: {graph._graph_name}. {schema_hint}\nOnly READ queries (MATCH/RETURN). No CREATE/DELETE/SET."},
+                {"role": "system", "content": f"Convert to Cypher for FalkorDB. Graph name: {graph_name}. {schema_hint}\nOnly READ queries (MATCH/RETURN). No CREATE/DELETE/SET."},
                 {"role": "user", "content": question},
             ],
             temperature=0.0,
@@ -649,7 +613,7 @@ async def graph_query(question: str, scope: str | None = None, ctx: Context = No
         if re.search(r"\b(CREATE|DELETE|SET|MERGE|REMOVE|DROP)\b", cypher, re.IGNORECASE):
             return _ok({"error": "Write operations not allowed", "cypher": cypher})
 
-        rows = await graph.execute_cypher(cypher)
+        rows = await graph.execute_cypher(cypher, domain_id)
         graph.close()
 
         results = [dict(r) if hasattr(r, 'items') else r for r in rows[:50]]

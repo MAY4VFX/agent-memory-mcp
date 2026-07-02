@@ -1,4 +1,11 @@
-"""FalkorDB graph storage for entities and relations."""
+"""FalkorDB graph storage for entities and relations.
+
+Multi-tenancy: each domain lives in its OWN FalkorDB graph named
+``<falkordb_graph>_<domain_id>``. The graph is selected per-call from the
+domain_id every method already receives, so even a raw/LLM-generated Cypher
+query (see execute_cypher / graph_query) can only ever touch a single tenant's
+graph — cross-tenant reads are structurally impossible.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,11 @@ from falkordb import FalkorDB
 from agent_memory_mcp.config import settings
 
 log = structlog.get_logger(__name__)
+
+
+def graph_name_for(domain_id) -> str:
+    """Per-tenant graph name for a domain_id."""
+    return f"{settings.falkordb_graph}_{domain_id}"
 
 
 def _parse_result(result) -> list[dict]:
@@ -24,7 +36,7 @@ def _parse_result(result) -> list[dict]:
 
 
 class FalkorDBStorage:
-    """FalkorDB graph storage for entities and relations."""
+    """FalkorDB graph storage for entities and relations (per-domain graphs)."""
 
     def __init__(
         self,
@@ -36,14 +48,27 @@ class FalkorDBStorage:
         _port = port or settings.falkordb_port
         _password = password or settings.falkordb_password
         self._db = FalkorDB(host=_host, port=_port, password=_password)
-        self._graph = self._db.select_graph(settings.falkordb_graph)
-        log.info("falkordb_connected", host=_host, port=_port, graph=settings.falkordb_graph)
+        self._base_name = settings.falkordb_graph
+        # Base graph — only for domain-less nodes (e.g. Channel).
+        self._graph = self._db.select_graph(self._base_name)
+        # Cache of per-domain graph handles.
+        self._graphs: dict[str, object] = {}
+        log.info("falkordb_connected", host=_host, port=_port, base_graph=self._base_name)
+
+    def _g(self, domain_id):
+        """Select (and cache) the per-tenant graph handle for a domain_id."""
+        name = graph_name_for(domain_id)
+        g = self._graphs.get(name)
+        if g is None:
+            g = self._db.select_graph(name)
+            self._graphs[name] = g
+        return g
 
     # ----------------------------------------------------------- sync internals
 
     def _merge_entity_sync(self, entity: dict) -> None:
         """MERGE an entity node."""
-        self._graph.query(
+        self._g(entity["domain_id"]).query(
             "MERGE (e:Entity {name: $name, domain_id: $domain_id}) "
             "SET e.type = $type, e.confidence = $confidence, e.source_quote = $source_quote",
             params={
@@ -57,7 +82,7 @@ class FalkorDBStorage:
 
     def _merge_relation_sync(self, relation: dict) -> None:
         """MERGE a relation between two entities."""
-        self._graph.query(
+        self._g(relation["domain_id"]).query(
             "MERGE (a:Entity {name: $src_name, domain_id: $domain_id}) "
             "MERGE (b:Entity {name: $tgt_name, domain_id: $domain_id}) "
             "MERGE (a)-[r:RELATION {type: $type}]->(b) "
@@ -73,7 +98,7 @@ class FalkorDBStorage:
         )
 
     def _merge_channel_sync(self, channel_id: int, name: str, domain_type: str = "") -> None:
-        """MERGE a Channel node."""
+        """MERGE a Channel node (domain-less — kept in the base graph)."""
         self._graph.query(
             "MERGE (c:Channel {channel_id: $channel_id}) "
             "SET c.name = $name, c.domain_type = $domain_type",
@@ -83,13 +108,13 @@ class FalkorDBStorage:
     def _query_entities_sync(self, domain_id: str, entity_type: str | None = None) -> list[dict]:
         """Query entities for a domain."""
         if entity_type:
-            result = self._graph.query(
+            result = self._g(domain_id).query(
                 "MATCH (e:Entity {domain_id: $domain_id, type: $type}) "
                 "RETURN e.name AS name, e.type AS type, e.confidence AS confidence",
                 params={"domain_id": domain_id, "type": entity_type},
             )
         else:
-            result = self._graph.query(
+            result = self._g(domain_id).query(
                 "MATCH (e:Entity {domain_id: $domain_id}) "
                 "RETURN e.name AS name, e.type AS type, e.confidence AS confidence",
                 params={"domain_id": domain_id},
@@ -102,7 +127,7 @@ class FalkorDBStorage:
         self, community_id: str, domain_id: str, summary: str, level: int = 0,
     ) -> None:
         """MERGE a Community node."""
-        self._graph.query(
+        self._g(domain_id).query(
             "MERGE (c:Community {community_id: $community_id, domain_id: $domain_id}) "
             "SET c.summary = $summary, c.level = $level",
             params={
@@ -117,7 +142,7 @@ class FalkorDBStorage:
         self, entity_name: str, community_id: str, domain_id: str,
     ) -> None:
         """Create MEMBER_OF relation between entity and community."""
-        self._graph.query(
+        self._g(domain_id).query(
             "MATCH (e:Entity {name: $name, domain_id: $domain_id}) "
             "MERGE (c:Community {community_id: $community_id, domain_id: $domain_id}) "
             "MERGE (e)-[:MEMBER_OF]->(c)",
@@ -132,7 +157,7 @@ class FalkorDBStorage:
         self, entity_name: str, domain_id: str,
     ) -> list[dict]:
         """Get communities for an entity."""
-        result = self._graph.query(
+        result = self._g(domain_id).query(
             "MATCH (e:Entity {name: $name, domain_id: $domain_id})"
             "-[:MEMBER_OF]->(c:Community) "
             "RETURN c.community_id AS id, c.summary AS summary, c.level AS level",
@@ -145,7 +170,7 @@ class FalkorDBStorage:
     ) -> tuple[list[dict], list[dict]]:
         """Export entities and relations for community detection."""
         entities = self._query_entities_sync(domain_id)
-        result = self._graph.query(
+        result = self._g(domain_id).query(
             "MATCH (a:Entity {domain_id: $domain_id})"
             "-[r:RELATION]-(b:Entity {domain_id: $domain_id}) "
             "RETURN DISTINCT a.name AS source, b.name AS target, r.type AS type",
@@ -156,7 +181,7 @@ class FalkorDBStorage:
 
     def _clear_communities_sync(self, domain_id: str) -> None:
         """Remove all Community nodes and MEMBER_OF relations for a domain."""
-        self._graph.query(
+        self._g(domain_id).query(
             "MATCH (c:Community {domain_id: $domain_id}) DETACH DELETE c",
             params={"domain_id": domain_id},
         )
@@ -167,7 +192,7 @@ class FalkorDBStorage:
         self, name: str, domain_id: str, max_depth: int = 2,
     ) -> list[dict]:
         """Get entity and its neighbors up to max_depth."""
-        result = self._graph.query(
+        result = self._g(domain_id).query(
             "MATCH path = (e:Entity {name: $name, domain_id: $domain_id})"
             "-[r:RELATION*1.." + str(max_depth) + "]-(n:Entity) "
             "RETURN DISTINCT n.name AS name, n.type AS type, "
@@ -182,7 +207,7 @@ class FalkorDBStorage:
         """Get entities by a list of names."""
         if not names:
             return []
-        result = self._graph.query(
+        result = self._g(domain_id).query(
             "MATCH (e:Entity) "
             "WHERE e.domain_id = $domain_id AND e.name IN $names "
             "RETURN e.name AS name, e.type AS type, "
@@ -195,7 +220,7 @@ class FalkorDBStorage:
         self, name: str, domain_id: str,
     ) -> list[dict]:
         """Get all relations for an entity."""
-        result = self._graph.query(
+        result = self._g(domain_id).query(
             "MATCH (a:Entity {name: $name, domain_id: $domain_id})"
             "-[r:RELATION]-(b:Entity) "
             "RETURN a.name AS source, b.name AS target, "
@@ -209,13 +234,13 @@ class FalkorDBStorage:
     ) -> list[dict]:
         """Count entities grouped by type."""
         if entity_type:
-            result = self._graph.query(
+            result = self._g(domain_id).query(
                 "MATCH (e:Entity {domain_id: $domain_id, type: $type}) "
                 "RETURN e.type AS type, count(e) AS count",
                 params={"domain_id": domain_id, "type": entity_type},
             )
         else:
-            result = self._graph.query(
+            result = self._g(domain_id).query(
                 "MATCH (e:Entity {domain_id: $domain_id}) "
                 "RETURN e.type AS type, count(e) AS count "
                 "ORDER BY count DESC",
@@ -298,13 +323,21 @@ class FalkorDBStorage:
 
     # ----------------------------------------------------------- raw Cypher execution
 
-    def _execute_cypher_sync(self, cypher: str, params: dict | None = None) -> list[dict]:
-        """Execute a raw Cypher query (READ-ONLY)."""
-        result = self._graph.query(cypher, params=params or {})
+    def _execute_cypher_sync(
+        self, cypher: str, domain_id, params: dict | None = None,
+    ) -> list[dict]:
+        """Execute a raw Cypher query against a SINGLE domain's graph (READ-ONLY).
+
+        domain_id selects the tenant graph, so the query is confined to that
+        tenant regardless of what the Cypher body says.
+        """
+        result = self._g(domain_id).query(cypher, params=params or {})
         return _parse_result(result)
 
-    async def execute_cypher(self, cypher: str, params: dict | None = None) -> list[dict]:
-        return await asyncio.to_thread(self._execute_cypher_sync, cypher, params)
+    async def execute_cypher(
+        self, cypher: str, domain_id, params: dict | None = None,
+    ) -> list[dict]:
+        return await asyncio.to_thread(self._execute_cypher_sync, cypher, domain_id, params)
 
     # ----------------------------------------------------------- close
 

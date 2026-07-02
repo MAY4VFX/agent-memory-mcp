@@ -281,6 +281,12 @@ async def on_code_entered(message: Message, state: FSMContext, collector_pool: C
 async def on_2fa_entered(message: Message, state: FSMContext, collector_pool: CollectorPool):
     """User entered 2FA password."""
     password = message.text.strip()
+    # Delete the password message immediately — before any branch that could
+    # return early (e.g. wrong password), so it never lingers in the chat.
+    try:
+        await message.delete()
+    except Exception:
+        pass
     data = await state.get_data()
     phone = data["phone"]
     session_string = data["session_string"]
@@ -319,12 +325,6 @@ async def on_2fa_entered(message: Message, state: FSMContext, collector_pool: Co
 
     await collector_pool.save_session(message.from_user.id, final_session, phone)
     await state.clear()
-
-    # Delete the password message for security
-    try:
-        await message.delete()
-    except Exception:
-        pass
 
     from agent_memory_mcp.bot.handlers.forum import main_menu_kb
     await message.answer(
