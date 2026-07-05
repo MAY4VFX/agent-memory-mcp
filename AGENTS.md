@@ -17,6 +17,13 @@ issues, статусы на доске, push).
 <!-- Всё ниже — local-правила проекта. Они СИЛЬНЕЕ правил роли. -->
 <!-- /hub-kit identity block -->
 
+## Деплой (где живёт)
+
+- Хостинг: Dokploy проект `agent-memory-mcp` на mayfx02 (сервисы amm-app, amm-listener + falkordb, redis)
+- DNS: https://agent.ai-vfx.com → 89.168.89.3 (oracl, NPM) → mayfx02:8002
+- Выкат: autoDeploy с push в main
+- Проверка живости: `curl -s https://agent.ai-vfx.com/health` (или статус deployment в Dokploy)
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
