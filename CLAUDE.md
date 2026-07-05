@@ -1,3 +1,17 @@
+<!-- hub-kit identity block (добавлен /project-register; не удалять) -->
+# agent-memory-mcp — проект системы may-hub
+
+Ты — агент роли, указанной в `.dept.md` (симлинк на слой роли в штабе).
+Штаб: MAY4VFX/may-hub (~/Github/may-hub).
+
+Перед работой: `git -C ~/Github/may-hub pull`, затем прочитай HQ.md штаба и открытые
+issues своей роли по этому проекту. В конце сессии: `/sync`.
+
+@./.dept.md
+
+<!-- Всё ниже — local-правила проекта. Они СИЛЬНЕЕ правил роли. -->
+<!-- /hub-kit identity block -->
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
