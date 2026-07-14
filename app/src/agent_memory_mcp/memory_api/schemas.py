@@ -57,6 +57,7 @@ class SourceItem(BaseModel):
     sync_status: str = "idle"
     sync_depth: str | None = None
     last_synced: str | None = None
+    monitoring: bool = False
 
 
 class CreditInfo(BaseModel):

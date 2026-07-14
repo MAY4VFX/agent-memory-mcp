@@ -126,6 +126,7 @@ async def list_sources(owner_id: int) -> list[dict]:
             "message_count": d.get("message_count", 0),
             "sync_depth": d.get("sync_depth"),
             "last_synced": str(d["last_synced_at"]) if d.get("last_synced_at") else None,
+            "monitoring": bool(d.get("monitoring")),
         }
         for d in domains
     ]
@@ -1011,6 +1012,9 @@ async def get_activity(
         }
         for d in domains_list
     }
+    # Источники без флага monitoring не отдают классификацию в workload:
+    # события идут (личное/коммуникации считаются), но без project-полей.
+    monitored_ids = {d["id"] for d in domains_list if d.get("monitoring")}
 
     # Chat → classification label (work project or personal category), per event.
     label_map = await db_ql.get_domain_label_map(async_engine, domain_ids)
@@ -1023,7 +1027,7 @@ async def get_activity(
     events = []
     for r in rows:
         meta = dmap.get(r["domain_id"], {})
-        lbl = label_map.get(r["domain_id"])
+        lbl = label_map.get(r["domain_id"]) if r["domain_id"] in monitored_ids else None
         sender_id = r.get("sender_id")
         events.append(
             {
@@ -1077,8 +1081,14 @@ async def classify_labels(owner_id: int) -> dict:
 
 
 async def list_labels(owner_id: int, type_: str | None = None) -> dict:
-    """List the owner's labels (optionally filtered by type)."""
-    rows = await db_ql.list_labels(async_engine, owner_id, type_)
+    """List the owner's labels (optionally filtered by type).
+
+    project-лейблы отдаются только с помеченных (monitoring=true) источников —
+    это единственный потребительский срез для observe-layer, и фильтр держит
+    его чистым от авто-классифицированных чатов-«проектов»."""
+    rows = await db_ql.list_labels(
+        async_engine, owner_id, type_, monitored_only=(type_ == "project")
+    )
     labels = [
         {
             "id": str(r["id"]),

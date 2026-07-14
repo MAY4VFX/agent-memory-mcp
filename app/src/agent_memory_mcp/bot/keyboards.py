@@ -331,12 +331,15 @@ def manage_kb(orphan_domains: list[dict], groups: list[dict], page: int = 0) -> 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def domain_edit_kb(domain_id: str) -> InlineKeyboardMarkup:
+def domain_edit_kb(domain_id: str, monitoring: bool = False) -> InlineKeyboardMarkup:
     """Edit options for a domain."""
+    mon_label = ("\u2705" if monitoring else "\u2b1c") + " Observe Layer"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="\u23f1 \u0427\u0430\u0441\u0442\u043e\u0442\u0430 \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0430\u0446\u0438\u0438", callback_data=f"dedit:freq:{domain_id}")],
         [InlineKeyboardButton(text="\U0001f4c5 \u0413\u043b\u0443\u0431\u0438\u043d\u0430 \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0430\u0446\u0438\u0438", callback_data=f"dedit:depth:{domain_id}")],
         [InlineKeyboardButton(text="\U0001f600 \u042d\u043c\u043e\u0434\u0437\u0438", callback_data=f"dedit:emoji:{domain_id}")],
+        # Тумблер «учитывать этот источник в Observe Layer/workload»
+        [InlineKeyboardButton(text=mon_label, callback_data=f"dmon:{domain_id}")],
         [InlineKeyboardButton(text="\u2b05 \u041d\u0430\u0437\u0430\u0434", callback_data=f"domain:view:{domain_id}")],
     ])
 
