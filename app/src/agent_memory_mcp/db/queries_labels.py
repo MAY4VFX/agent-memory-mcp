@@ -83,11 +83,27 @@ async def set_domain_project_label(
 
 
 async def list_labels(
-    engine: AsyncEngine, owner_id: int, type_: str | None = None
+    engine: AsyncEngine,
+    owner_id: int,
+    type_: str | None = None,
+    monitored_only: bool = False,
 ) -> list[dict]:
+    """monitored_only: только лейблы, привязанные хотя бы к одному источнику с
+    domains.monitoring=true — фильтр для observe-layer, чтобы чаты-«проекты»
+    из непомеченных папок не засоряли workload."""
     stmt = select(labels).where(labels.c.owner_id == owner_id)
     if type_:
         stmt = stmt.where(labels.c.type == type_)
+    if monitored_only:
+        from agent_memory_mcp.db.tables import domain_labels, domains
+        monitored = (
+            select(domain_labels.c.label_id)
+            .select_from(
+                domain_labels.join(domains, domain_labels.c.domain_id == domains.c.id)
+            )
+            .where(domains.c.monitoring.is_(True))
+        )
+        stmt = stmt.where(labels.c.id.in_(monitored))
     stmt = stmt.order_by(labels.c.type, labels.c.name)
     async with engine.begin() as conn:
         return [dict(r) for r in (await conn.execute(stmt)).mappings().all()]

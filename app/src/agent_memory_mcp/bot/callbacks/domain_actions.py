@@ -192,9 +192,31 @@ async def on_domain_edit(callback: CallbackQuery, state: FSMContext) -> None:
         f"\u0427\u0430\u0441\u0442\u043e\u0442\u0430: \u043a\u0430\u0436\u0434\u044b\u0435 {domain['sync_frequency_minutes']} \u043c\u0438\u043d\n"
         f"\u0413\u043b\u0443\u0431\u0438\u043d\u0430: {_PERIOD_LABELS.get(domain['sync_depth'], domain['sync_depth'])}\n\n"
         "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0447\u0442\u043e \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u044c:",
-        reply_markup=domain_edit_kb(domain_id),
+        reply_markup=domain_edit_kb(domain_id, monitoring=bool(domain.get("monitoring"))),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dmon:"))
+async def on_domain_monitoring_toggle(callback: CallbackQuery) -> None:
+    """Тумблер «учитывать источник в Observe Layer» (domains.monitoring)."""
+    if not is_allowed_user(callback.from_user.id, callback.from_user.username):
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    domain_id = callback.data.split(":", 1)[1]
+    domain = await queries.get_domain(async_engine, UUID(domain_id))
+    if not domain or domain["owner_id"] != callback.from_user.id:
+        await callback.answer("Источник не найден.", show_alert=True)
+        return
+    new_state = not bool(domain.get("monitoring"))
+    await queries.update_domain(async_engine, UUID(domain_id), monitoring=new_state)
+    await callback.message.edit_reply_markup(
+        reply_markup=domain_edit_kb(domain_id, monitoring=new_state)
+    )
+    await callback.answer(
+        "Источник учитывается в Observe Layer" if new_state
+        else "Источник исключён из Observe Layer"
+    )
 
 
 @router.callback_query(F.data.startswith("dedit:freq:"))

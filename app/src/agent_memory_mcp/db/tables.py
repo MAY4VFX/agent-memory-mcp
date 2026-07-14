@@ -75,6 +75,10 @@ domains = Table(
     Column("relation_count", Integer, server_default="0"),
     Column("is_active", Boolean, server_default="true"),
     Column("pinned", Boolean, server_default="false"),
+    # Отдавать ли источник в observe-layer/workload (opt-in, тумблер в боте).
+    # Непомеченный источник: его сообщения идут в /activity БЕЗ project-полей,
+    # его лейблы не видны в /labels?type=project.
+    Column("monitoring", Boolean, server_default="false"),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("owner_id", "channel_id"),
 )

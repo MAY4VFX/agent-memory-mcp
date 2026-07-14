@@ -8,6 +8,7 @@ import structlog
 from fastapi import APIRouter, Depends, Query
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 from agent_memory_mcp.memory_api import schemas as S
 from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.memory_api.service import ScopeNotFound
@@ -207,6 +208,25 @@ async def remove_source(source_id: UUID, api_key: dict = Depends(verify_api_key)
         raise HTTPException(404, "Source not found")
     await db_q.delete_domain(async_engine, source_id)
     return {"status": "deleted", "source_id": str(source_id)}
+
+
+class SourcePatch(BaseModel):
+    monitoring: bool
+
+
+@router.patch("/sources/{source_id}")
+async def patch_source(
+    source_id: UUID, body: SourcePatch, api_key: dict = Depends(verify_api_key)
+):
+    """Тумблер «учитывать в Observe Layer» для источника (см. domains.monitoring)."""
+    from agent_memory_mcp.db import queries as db_q
+    from agent_memory_mcp.db.engine import async_engine
+    domain = await db_q.get_domain(async_engine, source_id)
+    if not domain or domain["owner_id"] != api_key["telegram_id"]:
+        raise HTTPException(404, "Source not found")
+    updated = await db_q.update_domain(async_engine, source_id, monitoring=body.monitoring)
+    return {"status": "ok", "source_id": str(source_id),
+            "monitoring": bool(updated and updated.get("monitoring"))}
 
 
 # --- Paid endpoints (costs from CREDIT_COSTS) ---
