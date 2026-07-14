@@ -1009,6 +1009,10 @@ async def get_activity(
                 or d.get("channel_name")
                 or d.get("channel_username")
             ),
+            # Для пруф-ссылок у потребителей: t.me/<username> для публичных,
+            # t.me/c/<id> для приватных каналов/супергрупп, tg://user для личек.
+            "username": d.get("channel_username"),
+            "peer_type": d.get("peer_type"),
         }
         for d in domains_list
     }
@@ -1035,6 +1039,8 @@ async def get_activity(
                 "domain_id": str(r["domain_id"]),
                 "chat_id": meta.get("chat_id"),
                 "chat_title": meta.get("title"),
+                "chat_username": meta.get("username"),
+                "chat_peer_type": meta.get("peer_type"),
                 "ts": r["msg_date"].isoformat() if r.get("msg_date") else None,
                 "direction": "out" if sender_id is not None and sender_id == owner_id else "in",
                 "char_len": int(r["char_len"] or 0),
