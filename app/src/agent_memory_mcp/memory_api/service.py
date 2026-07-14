@@ -1090,9 +1090,13 @@ async def list_labels(
     его чистым от авто-классифицированных чатов-«проектов».
     include_unmonitored=True возвращает все (нужно потребителю, чтобы отличать
     «удалённый» проект от «немониторимого» при прунинге своих реестров)."""
+    is_project = type_ == "project"
     rows = await db_ql.list_labels(
         async_engine, owner_id, type_,
-        monitored_only=(type_ == "project" and not include_unmonitored),
+        monitored_only=(is_project and not include_unmonitored),
+        # Прунинг-срез: «жив» = привязан хотя бы к одному существующему
+        # источнику; удалённая папка отвязывает лейбл.
+        linked_only=(is_project and include_unmonitored),
     )
     labels = [
         {
