@@ -331,38 +331,63 @@ async def cb_source_folder(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("src:view:"))
-async def cb_source_view(callback: CallbackQuery):
-    """View a single source — details + delete."""
-    source_id = callback.data.split(":", 2)[2]
-    user_id = callback.from_user.id
-
+async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
+    """Render a single source: details + Observe Layer toggle + delete."""
     from agent_memory_mcp.db import queries as db_q
     from uuid import UUID
 
     domain = await db_q.get_domain(async_engine, UUID(source_id))
-    if not domain or domain["owner_id"] != user_id:
+    if not domain or domain["owner_id"] != callback.from_user.id:
         await callback.answer("Source not found.", show_alert=True)
         return
 
     name = f"@{domain['channel_username']}" if domain.get("channel_username") else domain.get("display_name", "?")
     synced = domain["last_synced_at"].strftime("%d.%m %H:%M") if domain.get("last_synced_at") else "not yet"
+    monitoring = bool(domain.get("monitoring"))
 
     text_msg = (
         f"📡 <b>{name}</b>\n\n"
         f"Messages: <b>{domain.get('message_count', 0)}</b>\n"
         f"Entities: {domain.get('entity_count', 0)}\n"
         f"Depth: {domain.get('sync_depth', '?')}\n"
-        f"Last synced: {synced}"
+        f"Last synced: {synced}\n"
+        f"Observe Layer: {'✅ учитывается' if monitoring else '⬜ не учитывается'}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=("✅" if monitoring else "⬜") + " Observe Layer",
+            callback_data=f"src:mon:{source_id}",
+        )],
         [InlineKeyboardButton(text="🗑 Delete", callback_data=f"src:delete:{source_id}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")],
     ])
 
     await callback.message.edit_text(text_msg, reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("src:view:"))
+async def cb_source_view(callback: CallbackQuery):
+    """View a single source — details + Observe Layer toggle + delete."""
+    await _render_source_view(callback, callback.data.split(":", 2)[2])
+
+
+@router.callback_query(F.data.startswith("src:mon:"))
+async def cb_source_monitoring(callback: CallbackQuery):
+    """Тумблер «учитывать источник в Observe Layer» (domains.monitoring)."""
+    source_id = callback.data.split(":", 2)[2]
+    from agent_memory_mcp.db import queries as db_q
+    from uuid import UUID
+
+    domain = await db_q.get_domain(async_engine, UUID(source_id))
+    if not domain or domain["owner_id"] != callback.from_user.id:
+        await callback.answer("Source not found.", show_alert=True)
+        return
+    await db_q.update_domain(
+        async_engine, UUID(source_id), monitoring=not bool(domain.get("monitoring"))
+    )
+    await _render_source_view(callback, source_id)
 
 
 @router.callback_query(F.data == "src:list")
