@@ -141,10 +141,15 @@ async def list_dialogs(
 async def list_labels(
     type: str | None = Query(None, description="Filter by label type, e.g. project"),
     tg_id: int | None = Query(None, description="Admin only: read this user's labels"),
+    include_unmonitored: bool = Query(
+        False, description="Also return project labels of non-monitored sources"
+    ),
     api_key: dict = Depends(verify_api_key),
 ):
     """List the owner's labels (project/task/…)."""
-    return await service.list_labels(_resolve_owner(api_key, tg_id), type)
+    return await service.list_labels(
+        _resolve_owner(api_key, tg_id), type, include_unmonitored=include_unmonitored
+    )
 
 
 @router.get("/admin/users")

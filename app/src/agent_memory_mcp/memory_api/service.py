@@ -1080,14 +1080,19 @@ async def classify_labels(owner_id: int) -> dict:
     return await classify_owner_chats(owner_id)
 
 
-async def list_labels(owner_id: int, type_: str | None = None) -> dict:
+async def list_labels(
+    owner_id: int, type_: str | None = None, include_unmonitored: bool = False
+) -> dict:
     """List the owner's labels (optionally filtered by type).
 
     project-лейблы отдаются только с помеченных (monitoring=true) источников —
     это единственный потребительский срез для observe-layer, и фильтр держит
-    его чистым от авто-классифицированных чатов-«проектов»."""
+    его чистым от авто-классифицированных чатов-«проектов».
+    include_unmonitored=True возвращает все (нужно потребителю, чтобы отличать
+    «удалённый» проект от «немониторимого» при прунинге своих реестров)."""
     rows = await db_ql.list_labels(
-        async_engine, owner_id, type_, monitored_only=(type_ == "project")
+        async_engine, owner_id, type_,
+        monitored_only=(type_ == "project" and not include_unmonitored),
     )
     labels = [
         {
