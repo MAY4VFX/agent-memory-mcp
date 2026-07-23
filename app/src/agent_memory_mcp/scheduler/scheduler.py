@@ -44,9 +44,41 @@ class SyncScheduler:
         self._fetch_semaphore = asyncio.Semaphore(1)
         # Track domains currently being synced to prevent duplicate tasks
         self._syncing_domains: set = set()
+        # asyncio only keeps weak references to tasks. Retain sync tasks until
+        # their callbacks run, otherwise a pending task can be garbage-collected
+        # and permanently leak its in-flight domain slot.
+        self._sync_tasks: set[asyncio.Task] = set()
         # Owners whose chats need (re)classification after a new source's first
         # sync — drained once per loop so a folder of N chats classifies once.
         self._classify_pending: set = set()
+
+    def _spawn_incremental(self, domain: dict) -> asyncio.Task:
+        """Start and retain one incremental sync until it finishes."""
+        domain_id = domain["id"]
+        self._syncing_domains.add(domain_id)
+        task = asyncio.create_task(
+            self._run_incremental(domain),
+            name=f"sync_{domain_id}",
+        )
+        self._sync_tasks.add(task)
+        task.add_done_callback(
+            lambda completed, did=domain_id: self._sync_task_done(completed, did)
+        )
+        return task
+
+    def _sync_task_done(self, task: asyncio.Task, domain_id) -> None:
+        """Release task/domain bookkeeping even after cancellation."""
+        self._sync_tasks.discard(task)
+        self._syncing_domains.discard(domain_id)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error(
+                "incremental_sync_task_failed",
+                domain_id=str(domain_id),
+                error=str(exc),
+            )
 
     async def _get_collector_for_domain(self, domain: dict):
         """Get a Telethon client for a domain: global collector or user's session from pool."""
@@ -82,13 +114,14 @@ class SyncScheduler:
                 skipped = 0
                 # Respect in_flight limit — don't start new tasks if too many running
                 max_new = max(0, settings.scheduler_max_concurrent - len(self._syncing_domains))
-                for domain in domains[:max_new]:
+                for domain in domains:
+                    if started >= max_new:
+                        break
                     did = domain["id"]
                     if did in self._syncing_domains:
                         skipped += 1
                         continue
-                    self._syncing_domains.add(did)
-                    asyncio.create_task(self._run_incremental(domain))
+                    self._spawn_incremental(domain)
                     started += 1
                 log.info(
                     "scheduler_tick",
@@ -214,16 +247,47 @@ class SyncScheduler:
             )
 
     async def _run_incremental(self, domain: dict) -> None:
+        """Run a sync and always release its in-flight domain slot."""
+        domain_id = domain["id"]
+        try:
+            await self._run_incremental_inner(domain)
+        finally:
+            self._syncing_domains.discard(domain_id)
+
+    async def _run_incremental_inner(self, domain: dict) -> None:
         """Run incremental sync for a domain."""
         from agent_memory_mcp.pipeline.pipelines import run_incremental_ingestion, run_initial_ingestion
 
         domain_id = domain["id"]
         log.info("incremental_sync_start", domain_id=str(domain_id))
 
-        collector = await self._get_collector_for_domain(domain)
+        try:
+            collector = await asyncio.wait_for(
+                self._get_collector_for_domain(domain),
+                timeout=settings.scheduler_collector_timeout,
+            )
+        except TimeoutError:
+            log.error(
+                "collector_acquire_timeout",
+                domain_id=str(domain_id),
+                owner_id=domain.get("owner_id"),
+                timeout=settings.scheduler_collector_timeout,
+            )
+            await queries.update_domain(
+                async_engine,
+                domain_id,
+                next_sync_at=datetime.now(timezone.utc)
+                + timedelta(minutes=max(domain.get("sync_frequency_minutes", 60), 10)),
+            )
+            return
         if not collector:
             log.error("no_collector", domain_id=str(domain_id), owner_id=domain.get("owner_id"))
-            self._syncing_domains.discard(domain_id)
+            await queries.update_domain(
+                async_engine,
+                domain_id,
+                next_sync_at=datetime.now(timezone.utc)
+                + timedelta(minutes=max(domain.get("sync_frequency_minutes", 60), 10)),
+            )
             return
 
         # Determine if collector is a raw TelegramClient (from pool) or TelegramCollector
@@ -398,9 +462,6 @@ class SyncScheduler:
                 async_engine, domain_id,
                 next_sync_at=datetime.now(timezone.utc) + timedelta(minutes=backoff_minutes),
             )
-        finally:
-            self._syncing_domains.discard(domain_id)
-
     async def _check_digests(self) -> None:
         """Check and run due digests for the current UTC hour."""
         if not self._bot:

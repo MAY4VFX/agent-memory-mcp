@@ -133,6 +133,17 @@ async def run_digest(
                     domain_count=len(domain_ids), message_count=0,
                     completed_at=datetime.now(timezone.utc),
                 )
+                if not preview:
+                    await dq.update_digest_config(
+                        engine, config_id, last_sent_at=datetime.now(timezone.utc),
+                    )
+                await _send_digest(bot, user_id, text)
+                log.info(
+                    "digest_sent_empty",
+                    user_id=user_id,
+                    domains=len(domain_ids),
+                    stale=len(stale),
+                )
                 return
 
             # Filter out digest posts from other channels
