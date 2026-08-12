@@ -46,10 +46,16 @@ class _UserCollector:
         Lets a user add private work chats they're merely a member of, which have
         no @username and no invite link. Each entry flags `supported`: channels,
         supergroups, and basic groups sync; DMs are listed but not ingestable.
+
+        Saved Messages (the self-chat, `User.is_self`) is relabeled "⭐ Избранное"
+        instead of showing the user's own name — otherwise it's indistinguishable
+        from any other DM and gets scrolled past. It's also floated to the top and
+        guaranteed present even if it fell outside `limit` (rare, low-traffic chat).
         """
         from telethon.tl.types import Channel, Chat, User
 
         out: list[dict] = []
+        saved_seen = False
         async for d in self.client.iter_dialogs(limit=limit):
             e = d.entity
             if isinstance(e, Channel):
@@ -61,18 +67,45 @@ class _UserCollector:
                 typ, supported = "dm", True
             else:
                 typ, supported = "other", False
-            name = (
-                getattr(e, "title", None)
-                or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
-                or (f"@{e.username}" if getattr(e, "username", None) else str(getattr(e, "id", "?")))
-            )
+            is_saved = isinstance(e, User) and getattr(e, "is_self", False)
+            if is_saved:
+                saved_seen = True
+                name = "⭐ Избранное"
+            else:
+                name = (
+                    getattr(e, "title", None)
+                    or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
+                    or (f"@{e.username}" if getattr(e, "username", None) else str(getattr(e, "id", "?")))
+                )
             out.append({
                 "chat_id": getattr(e, "id", None),
                 "title": name,
                 "username": getattr(e, "username", "") or "",
                 "type": typ,
                 "supported": supported,
+                "_saved": is_saved,
             })
+
+        if not saved_seen:
+            # Rare (Избранное inactive → sorted past `limit`) — one extra call,
+            # not per-dialog, to guarantee it's always offered.
+            try:
+                me = await self.client.get_me()
+            except Exception:
+                me = None
+            if me is not None:
+                out.append({
+                    "chat_id": me.id,
+                    "title": "⭐ Избранное",
+                    "username": getattr(me, "username", "") or "",
+                    "type": "dm",
+                    "supported": True,
+                    "_saved": True,
+                })
+
+        out.sort(key=lambda x: not x["_saved"])
+        for entry in out:
+            del entry["_saved"]
         self.last_used = time.monotonic()
         return out
 
@@ -82,7 +115,11 @@ class _UserCollector:
 
         Bypasses the username/invite-link requirement: the entity is found among
         the user's own dialogs (access_hash from the live session). Channels,
-        supergroups, and basic groups are supported; DMs are not."""
+        supergroups, and basic groups are supported; DMs are not.
+
+        Saved Messages (`User.is_self`) is named "⭐ Избранное" so the persisted
+        `display_name`/`channel_name` stays recognizable once it's an actual
+        source, not just the user's own name."""
         from telethon.tl.types import Channel, Chat, User
 
         async for d in self.client.iter_dialogs():
@@ -96,11 +133,14 @@ class _UserCollector:
                     peer_type = "user"
                 else:
                     raise ValueError("Unsupported chat type")
-                name = (
-                    getattr(e, "title", None)
-                    or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
-                    or (f"@{e.username}" if getattr(e, "username", None) else str(e.id))
-                )
+                if isinstance(e, User) and getattr(e, "is_self", False):
+                    name = "⭐ Избранное"
+                else:
+                    name = (
+                        getattr(e, "title", None)
+                        or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))
+                        or (f"@{e.username}" if getattr(e, "username", None) else str(e.id))
+                    )
                 self.last_used = time.monotonic()
                 return {
                     "channel_id": e.id,
@@ -119,7 +159,7 @@ class _UserCollector:
         sync today; basic groups + DMs are listed but flagged unsupported).
         """
         from telethon.tl.functions.messages import GetDialogFiltersRequest
-        from telethon.tl.types import InputPeerChannel, InputPeerChat, InputPeerUser
+        from telethon.tl.types import InputPeerChannel, InputPeerChat, InputPeerUser, User
 
         try:
             result = await self.client(GetDialogFiltersRequest())
@@ -143,6 +183,8 @@ class _UserCollector:
         def _name(e, pid):
             if e is None:
                 return str(pid)
+            if isinstance(e, User) and getattr(e, "is_self", False):
+                return "⭐ Избранное"
             return (
                 getattr(e, "title", None)
                 or " ".join(filter(None, [getattr(e, "first_name", None), getattr(e, "last_name", None)]))

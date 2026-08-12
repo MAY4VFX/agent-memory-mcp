@@ -125,6 +125,36 @@ async def hub_add_sources(callback: CallbackQuery) -> None:
     )
 
 
+# ---------------- Избранное (Saved Messages) ----------------
+
+@router.callback_query(F.data == "src:saved")
+async def src_saved(callback: CallbackQuery) -> None:
+    """Add the user's own Saved Messages chat as a source — one tap, no need
+    to hunt for it in the dialog list (it's just the user's own name there)."""
+    await callback.answer()
+    from agent_memory_mcp.collector.pool import collector_pool
+
+    if not collector_pool:
+        await callback.message.answer("Коллектор недоступен, попробуйте позже.")
+        return
+    uc = await collector_pool.get_collector(callback.from_user.id)
+    if not uc:
+        await callback.message.answer(
+            "Telegram не подключён. Авторизуйтесь через /start.",
+        )
+        return
+    try:
+        me = await uc.client.get_me()
+    except Exception:
+        log.exception("get_me_failed", user_id=callback.from_user.id)
+        await callback.message.answer("Не удалось получить профиль Telegram.")
+        return
+    res = await service.add_source(
+        callback.from_user.id, str(me.id), source_type="dialog", sync_range="3m",
+    )
+    await callback.message.answer(res.get("message") or f"Статус: {res.get('status')}")
+
+
 # ---------------- Native Telegram chat picker ----------------
 
 @router.callback_query(F.data == "src:native")

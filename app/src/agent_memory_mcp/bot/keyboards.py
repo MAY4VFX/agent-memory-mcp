@@ -194,6 +194,7 @@ def skip_list_name_kb() -> InlineKeyboardMarkup:
 def add_sources_kb() -> InlineKeyboardMarkup:
     """Method picker for adding a source."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="\u2b50 \u0418\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435", callback_data="src:saved")],
         [InlineKeyboardButton(text="\U0001f4c7 Pick chat from Telegram", callback_data="src:native")],
         [InlineKeyboardButton(text="\U0001f5c2 Import folders (multi-select)", callback_data="hub:folders_multi")],
         [InlineKeyboardButton(text="\U0001f517 By link / @username / ID", callback_data="src:bylink")],
