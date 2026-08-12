@@ -363,6 +363,10 @@ class SyncScheduler:
                         "content_type": m.content_type,
                         "hashtags": tags if tags else None,
                         "msg_date": m.date,
+                        "fwd_from_id": m.fwd_from_id,
+                        "fwd_from_name": m.fwd_from_name,
+                        "fwd_from_username": m.fwd_from_username,
+                        "fwd_date": m.fwd_date,
                     })
                 await queries.bulk_insert_messages(async_engine, msg_rows)
 

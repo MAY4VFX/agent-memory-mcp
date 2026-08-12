@@ -19,6 +19,7 @@ from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.memory_api.service import ScopeNotFound
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db.engine import async_engine
+from agent_memory_mcp.models.messages import resolve_sender_label_from_row
 
 log = structlog.get_logger(__name__)
 
@@ -463,7 +464,7 @@ async def keyword_search(query: str, scope: str | None = None, limit: int = 50, 
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "channel_id": r.get("channel_id"),
             "topic_id": r.get("topic_id"),
-            "sender": r.get("sender_name"),
+            "sender": resolve_sender_label_from_row(r),
         }
         for r in rows[:limit]
     ]
@@ -645,7 +646,7 @@ async def read_messages(message_ids: list[str], ctx: Context = None) -> str:
         {
             "id": str(r["id"]),
             "content": r.get("content", ""),
-            "sender": r.get("sender_name"),
+            "sender": resolve_sender_label_from_row(r),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "channel_id": r.get("channel_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),

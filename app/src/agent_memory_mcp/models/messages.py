@@ -24,6 +24,12 @@ class TelegramMessage(BaseModel):
     topic_id: int | None = None
     content_type: str = "text"
     raw_json: dict | None = None
+    # Forward attribution (Telethon MessageFwdHeader), extracted at fetch time
+    # so the original author survives the raw_json -> ProcessedMessage cut.
+    fwd_from_id: int | None = None
+    fwd_from_name: str | None = None
+    fwd_from_username: str | None = None
+    fwd_date: datetime | None = None
 
 
 class ProcessedMessage(BaseModel):
@@ -43,6 +49,51 @@ class ProcessedMessage(BaseModel):
     language: str | None = None
     hashtags: list[str] = Field(default_factory=list)
     is_noise: bool = False
+    fwd_from_id: int | None = None
+    fwd_from_name: str | None = None
+    fwd_from_username: str | None = None
+    fwd_date: datetime | None = None
+
+    @property
+    def attribution(self) -> str | None:
+        """Best display label for this message's true origin.
+
+        For a forward, this is the original author/channel (falls back to
+        sender_name if the forward header carried no name at all); for a
+        direct message it's just sender_name. None if nothing is known.
+        """
+        return resolve_sender_label(
+            self.sender_name, self.fwd_from_name, self.fwd_from_username,
+        )
+
+
+def resolve_sender_label(
+    sender_name: str | None,
+    fwd_from_name: str | None = None,
+    fwd_from_username: str | None = None,
+) -> str | None:
+    """Best display label for a message's origin.
+
+    When the message is a forward (``fwd_from_name`` set), label with the
+    original author/channel — not whoever forwarded it — so agent context
+    never attributes forwarded content to the forwarder. Falls back to
+    ``sender_name`` for non-forwarded messages or forwards with no resolvable
+    original name.
+    """
+    if fwd_from_name:
+        if fwd_from_username:
+            return f"{fwd_from_name} (@{fwd_from_username}, переслано)"
+        return f"{fwd_from_name} (переслано)"
+    return sender_name
+
+
+def resolve_sender_label_from_row(row: dict) -> str | None:
+    """Same as resolve_sender_label, but reading from a raw DB row dict."""
+    return resolve_sender_label(
+        row.get("sender_name"),
+        row.get("fwd_from_name"),
+        row.get("fwd_from_username"),
+    )
 
 
 def telegram_to_processed(
@@ -59,6 +110,10 @@ def telegram_to_processed(
         date=msg.date,
         reply_to_msg_id=msg.reply_to_msg_id,
         content_type=msg.content_type,
+        fwd_from_id=msg.fwd_from_id,
+        fwd_from_name=msg.fwd_from_name,
+        fwd_from_username=msg.fwd_from_username,
+        fwd_date=msg.fwd_date,
     )
 
 
@@ -78,6 +133,10 @@ def pg_row_to_processed(row: dict, channel_id: int) -> "ProcessedMessage":
         language=row.get("language"),
         hashtags=row.get("hashtags") or [],
         is_noise=row.get("is_noise", False),
+        fwd_from_id=row.get("fwd_from_id"),
+        fwd_from_name=row.get("fwd_from_name"),
+        fwd_from_username=row.get("fwd_from_username"),
+        fwd_date=row.get("fwd_date"),
     )
 
 
@@ -104,7 +163,8 @@ class ThreadGroup(BaseModel):
         """Concatenate message texts into combined_text."""
         parts = []
         for msg in sorted(self.messages, key=lambda m: m.date):
-            prefix = f"[{msg.sender_name or 'Unknown'}] " if msg.sender_name else ""
+            label = msg.attribution
+            prefix = f"[{label}] " if label else ""
             parts.append(f"{prefix}{msg.text}")
         self.combined_text = "\n".join(parts)
         if self.messages:
