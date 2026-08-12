@@ -136,6 +136,11 @@ messages = Table(
     Column("content", Text),
     Column("content_type", String(32), server_default="text"),
     Column("raw_json", JSONB),
+    # Forward attribution — original author/channel, not the forwarder.
+    Column("fwd_from_id", BigInteger),
+    Column("fwd_from_name", String(255)),
+    Column("fwd_from_username", String(255)),
+    Column("fwd_date", DateTime(timezone=True)),
     Column("language", String(8)),
     Column("hashtags", JSONB),
     Column("content_tsv", TSVECTOR, nullable=True),

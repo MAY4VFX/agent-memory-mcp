@@ -11,6 +11,7 @@ from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db import queries_groups as db_g
 from agent_memory_mcp.db import queries_labels as db_ql
 from agent_memory_mcp.db.engine import async_engine
+from agent_memory_mcp.models.messages import resolve_sender_label_from_row
 from agent_memory_mcp.storage.embedding_client import EmbeddingClient
 from agent_memory_mcp.storage.falkordb_client import FalkorDBStorage
 from agent_memory_mcp.storage.milvus_client import MilvusStorage
@@ -890,7 +891,7 @@ async def fetch_messages(
         out.append({
             "id": str(r["id"]),
             "content": r.get("content", ""),
-            "sender": r.get("sender_name"),
+            "sender": resolve_sender_label_from_row(r),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "topic_id": r.get("topic_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),

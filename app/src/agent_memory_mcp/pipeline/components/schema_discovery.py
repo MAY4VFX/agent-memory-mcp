@@ -58,7 +58,7 @@ class SchemaDiscovery:
         # Format messages for the LLM
         lines: list[str] = []
         for i, msg in enumerate(sample, 1):
-            sender = msg.sender_name or "Unknown"
+            sender = msg.attribution or "Unknown"
             lines.append(f"[{i}] [{sender}] {msg.text}")
         messages_text = "\n".join(lines)
 

@@ -107,6 +107,59 @@ async def resolve_link(client, link: str) -> dict:
     }
 
 
+def extract_fwd_info(msg: Message) -> dict:
+    """Extract forward attribution from an already-fetched Telethon message.
+
+    Reads only what Telethon already resolved for this message from the same
+    API response (``msg.fwd_from`` header + entities Telethon attaches while
+    building ``msg.forward``) — this does NOT perform extra MTProto requests.
+    As a result, ``fwd_from_id`` is reliably populated whenever the forward
+    header carries a peer, but ``fwd_from_name`` / ``fwd_from_username`` can
+    stay ``None`` when the original user/channel wasn't included in the same
+    response (e.g. very old / since-deleted accounts) — that's an accepted
+    gap, not a bug: resolving it would require a dedicated get_entity() call
+    per forwarded message.
+
+    Returns a dict with fwd_from_id, fwd_from_name, fwd_from_username,
+    fwd_date — all None for a non-forwarded message.
+    """
+    fwd = msg.fwd_from
+    if fwd is None:
+        return {
+            "fwd_from_id": None,
+            "fwd_from_name": None,
+            "fwd_from_username": None,
+            "fwd_date": None,
+        }
+
+    fwd_from_id: int | None = None
+    fwd_from_name: str | None = fwd.from_name or None
+    fwd_from_username: str | None = None
+
+    forward = getattr(msg, "forward", None)
+    if forward is not None:
+        entity = forward.sender or forward.chat
+        if forward.sender_id is not None:
+            fwd_from_id = forward.sender_id
+        elif forward.chat_id is not None:
+            fwd_from_id = forward.chat_id
+        if entity is not None:
+            fwd_from_name = fwd_from_name or (
+                getattr(entity, "title", None) or getattr(entity, "first_name", None)
+            )
+            fwd_from_username = getattr(entity, "username", None)
+
+    if fwd_from_name is None:
+        fwd_from_name = fwd.post_author or None
+
+    return {
+        "fwd_from_id": fwd_from_id,
+        "fwd_from_name": fwd_from_name,
+        "fwd_from_username": fwd_from_username,
+        "fwd_date": fwd.date,
+    }
+
+
 def _content_type(msg: Message) -> str:
     if msg.photo:
         return "photo"
@@ -350,6 +403,8 @@ class TelegramCollector:
                             if topic_id is None and getattr(msg.reply_to, "forum_topic", False):
                                 topic_id = msg.reply_to.reply_to_msg_id
 
+                        fwd_info = extract_fwd_info(msg)
+
                         chunk.append(
                             TelegramMessage(
                                 message_id=msg.id,
@@ -366,6 +421,7 @@ class TelegramCollector:
                                 topic_id=topic_id,
                                 content_type=_content_type(msg),
                                 raw_json=msg.to_dict() if msg.text else None,
+                                **fwd_info,
                             )
                         )
                     break  # chunk fetched successfully
