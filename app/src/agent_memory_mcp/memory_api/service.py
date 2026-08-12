@@ -117,7 +117,13 @@ async def search_memory(
 
 
 async def list_sources(owner_id: int) -> list[dict]:
-    """List all sources (domains) for a user."""
+    """List all sources (domains) for a user.
+
+    Carries sync state explicitly (`sync_enabled`/`next_sync`): `monitoring` is
+    the Observe Layer toggle, NOT a sync switch, and consumers used to read a
+    `monitoring: false` on a perfectly healthy source as "synchronization is
+    off". Both meanings now ship under self-explaining names.
+    """
     domains = await db_q.list_domains(async_engine, owner_id)
     return [
         {
@@ -127,7 +133,14 @@ async def list_sources(owner_id: int) -> list[dict]:
             "message_count": d.get("message_count", 0),
             "sync_depth": d.get("sync_depth"),
             "last_synced": str(d["last_synced_at"]) if d.get("last_synced_at") else None,
+            # --- sync (does this source keep ingesting?) ---
+            "sync_enabled": bool(d.get("is_active", True)),
+            "next_sync": str(d["next_sync_at"]) if d.get("next_sync_at") else None,
+            "sync_frequency_minutes": d.get("sync_frequency_minutes"),
+            # --- Observe Layer (does this source feed labels/workload?) ---
+            # `monitoring` kept for back-compat with existing MCP consumers.
             "monitoring": bool(d.get("monitoring")),
+            "observe_layer": bool(d.get("monitoring")),
         }
         for d in domains
     ]

@@ -284,8 +284,18 @@ async def list_folders(ctx: Context = None) -> str:
 async def list_sources(ctx: Context = None) -> str:
     """List all connected memory sources (channels, groups, folders).
 
+    Two INDEPENDENT flags per source — do not conflate them:
+      - `sync_enabled` — the source keeps ingesting new messages. This is what
+        "is synchronization working?" means. Pair it with `next_sync` (when the
+        next run is due) and `last_synced`.
+      - `monitoring` / `observe_layer` — the source counts toward the Observe
+        Layer (labels, workload classification). A source with this OFF still
+        syncs normally; it is NOT a sync switch and says nothing about sync.
+
+    For per-run detail (job status, errors, progress) call sync_status instead.
+
     Returns:
-        List of sources with sync status and message counts.
+        List of sources with message counts, sync state, and Observe Layer flag.
     """
     owner_id = await _resolve_owner(ctx)
     sources = await service.list_sources(owner_id=owner_id)

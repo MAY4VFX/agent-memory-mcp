@@ -54,10 +54,15 @@ class SourceItem(BaseModel):
     channel_username: str | None = None
     display_name: str | None = None
     message_count: int = 0
-    sync_status: str = "idle"
     sync_depth: str | None = None
     last_synced: str | None = None
+    # Sync state — "does this source keep ingesting?"
+    sync_enabled: bool = True
+    next_sync: str | None = None
+    sync_frequency_minutes: int | None = None
+    # Observe Layer toggle — NOT a sync switch. `monitoring` is the legacy name.
     monitoring: bool = False
+    observe_layer: bool = False
 
 
 class CreditInfo(BaseModel):

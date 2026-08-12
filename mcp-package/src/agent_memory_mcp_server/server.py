@@ -76,7 +76,16 @@ async def add_source(handle: str, source_type: str = "channel", sync_range: str 
 
 @mcp.tool()
 async def list_sources() -> str:
-    """List all connected memory sources with sync status."""
+    """List all connected memory sources.
+
+    Each source carries two INDEPENDENT flags — do not conflate them:
+      - `sync_enabled` (+ `next_sync`, `last_synced`) — the source keeps
+        ingesting new messages. This is "is synchronization working?".
+      - `monitoring` / `observe_layer` — the source counts toward the Observe
+        Layer (labels, workload). OFF does NOT mean syncing is off.
+
+    For per-run job detail and errors, call sync_status.
+    """
     return await _get_client().list_sources()
 
 
