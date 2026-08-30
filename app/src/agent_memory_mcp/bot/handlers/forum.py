@@ -212,8 +212,9 @@ async def btn_sources(message: Message):
     await _show_sources(message, message.from_user.id)
 
 
-async def _show_sources(target, user_id: int, edit: bool = False):
+async def _show_sources(target, user_id: int, edit: bool = False, page: int = 0):
     """Top-level: folders as buttons + standalone channels."""
+    from agent_memory_mcp.bot.keyboards import source_list_kb
     from agent_memory_mcp.db import queries as db_q
     from agent_memory_mcp.db import queries_groups as gq
 
@@ -222,55 +223,32 @@ async def _show_sources(target, user_id: int, edit: bool = False):
 
     # Find which domains belong to groups
     grouped_ids: set = set()
+    folders = []
     for g in groups:
         members = await gq.get_group_domains(async_engine, g["id"])
         grouped_ids.update(m["id"] for m in members)
+        folders.append({
+            "id": g["id"],
+            "name": g["name"],
+            "member_count": len(members),
+            "total_messages": sum(m.get("message_count", 0) for m in members),
+        })
 
     # Standalone = pinned or not in any group
     standalone = [d for d in domains if d["id"] not in grouped_ids]
 
-    add_btn = InlineKeyboardButton(text="➕ Add Source", callback_data="src:add")
-
     if not domains and not groups:
-        text_msg = (
-            "📡 <b>Sources</b>\n\n"
-            "No sources connected yet."
-        )
+        add_btn = InlineKeyboardButton(text="➕ Add Source", callback_data="src:add")
         await _send_or_edit(
-            target, text_msg, InlineKeyboardMarkup(inline_keyboard=[[add_btn]]), edit
+            target,
+            "📡 <b>Sources</b>\n\nNo sources connected yet.",
+            InlineKeyboardMarkup(inline_keyboard=[[add_btn]]),
+            edit,
         )
         return
 
-    buttons = [[add_btn]]
-
-    # Folder buttons
-    for g in groups:
-        members = await gq.get_group_domains(async_engine, g["id"])
-        total_msgs = sum(m.get("message_count", 0) for m in members)
-        label = f"📁 {g['name']} ({len(members)} ch, {total_msgs} msgs)"
-        buttons.append([InlineKeyboardButton(
-            text=label,
-            callback_data=f"src:folder:{g['id']}",
-        )])
-
-    # Standalone channel buttons (rows of 2)
-    row = []
-    for d in standalone:
-        name = f"@{d['channel_username']}" if d.get("channel_username") else d.get("display_name", "?")
-        count = d.get("message_count", 0)
-        row.append(InlineKeyboardButton(
-            text=f"📡 {name} ({count})",
-            callback_data=f"src:view:{d['id']}",
-        ))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text_msg = f"📡 <b>Sources</b> ({len(domains)} channels)"
-    await _send_or_edit(target, text_msg, kb, edit)
+    await _send_or_edit(target, text_msg, source_list_kb(folders, standalone, page), edit)
 
 
 @router.callback_query(F.data == "src:add")
@@ -288,47 +266,51 @@ async def cb_source_add(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("src:folder:"))
 async def cb_source_folder(callback: CallbackQuery):
     """View channels inside a folder."""
-    group_id = callback.data.split(":", 2)[2]
-    user_id = callback.from_user.id
+    await _render_folder(callback, callback.data.split(":", 2)[2])
 
+
+@router.callback_query(F.data.startswith("pg:fld:"))
+async def cb_source_folder_page(callback: CallbackQuery):
+    """Paginate a folder's channel list."""
+    _, _, group_id, page = callback.data.split(":")
+    await _render_folder(callback, group_id, int(page))
+
+
+@router.callback_query(F.data.startswith("pg:src:"))
+async def cb_source_list_page(callback: CallbackQuery):
+    """Paginate the top-level source list."""
+    await callback.answer()
+    await _show_sources(
+        callback.message,
+        callback.from_user.id,
+        edit=True,
+        page=int(callback.data.split(":")[2]),
+    )
+
+
+async def _render_folder(callback: CallbackQuery, group_id: str, page: int = 0) -> None:
+    """Render one folder — paginated, a folder can hold hundreds of channels."""
+    from agent_memory_mcp.bot.keyboards import folder_view_kb
     from agent_memory_mcp.db import queries_groups as gq
     from uuid import UUID
 
     group = await gq.get_group(async_engine, UUID(group_id))
-    if not group or group["owner_id"] != user_id:
+    if not group or group["owner_id"] != callback.from_user.id:
         await callback.answer("Folder not found.", show_alert=True)
         return
 
     members = await gq.get_group_domains(async_engine, UUID(group_id))
-
-    buttons = []
-    row = []
-    for d in members:
-        name = f"@{d['channel_username']}" if d.get("channel_username") else d.get("display_name", "?")
-        count = d.get("message_count", 0)
-        row.append(InlineKeyboardButton(
-            text=f"📡 {name} ({count})",
-            callback_data=f"src:view:{d['id']}",
-        ))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-
-    buttons.append([InlineKeyboardButton(text="🗑 Delete Folder", callback_data=f"src:delfolder:{group_id}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")])
-
     total_msgs = sum(m.get("message_count", 0) for m in members)
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text_msg = (
         f"📁 <b>{group['name']}</b>\n\n"
         f"Channels: {len(members)}\n"
         f"Total messages: {total_msgs}"
     )
 
-    await callback.message.edit_text(text_msg, reply_markup=kb)
     await callback.answer()
+    await _send_or_edit(
+        callback.message, text_msg, folder_view_kb(group_id, members, page), edit=True
+    )
 
 
 async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:

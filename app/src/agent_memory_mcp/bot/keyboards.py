@@ -137,6 +137,53 @@ def tests_kb() -> InlineKeyboardMarkup:
 
 # ------------------------------------------------------------------ Sources Hub & Lists
 
+def _source_button(d: dict) -> InlineKeyboardButton:
+    """One channel row in the 📡 Sources menus."""
+    name = f"@{d['channel_username']}" if d.get("channel_username") else d.get("display_name", "?")
+    count = d.get("message_count") or 0
+    return InlineKeyboardButton(
+        text=f"\U0001f4e1 {name} ({count})",
+        callback_data=f"src:view:{d['id']}",
+    )
+
+
+def source_list_kb(
+    folders: list[dict], standalone: list[dict], page: int = 0
+) -> InlineKeyboardMarkup:
+    """Top-level 📡 Sources: folders first, then standalone channels.
+
+    Paginated because Telegram rejects a reply markup above ~10 KB — an account
+    with a couple hundred sources otherwise gets a message it cannot send.
+    """
+    items = []
+    for g in folders:
+        label = (
+            f"\U0001f4c1 {g['name']} "
+            f"({g.get('member_count', 0)} ch, {g.get('total_messages', 0)} msgs)"
+        )
+        items.append(InlineKeyboardButton(text=label, callback_data=f"src:folder:{g['id']}"))
+    items.extend(_source_button(d) for d in standalone)
+
+    buttons = [[InlineKeyboardButton(text="\u2795 Add Source", callback_data="src:add")]]
+    for btn in _paginate(items, page):
+        buttons.append([btn])
+    buttons.extend(_page_nav(items, page, "pg:src:"))
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def folder_view_kb(
+    group_id: str, members: list[dict], page: int = 0
+) -> InlineKeyboardMarkup:
+    """Channels inside a folder — paginated, folders can hold hundreds."""
+    buttons = [[_source_button(d)] for d in _paginate(members, page)]
+    buttons.extend(_page_nav(members, page, f"pg:fld:{group_id}:"))
+    buttons.append([InlineKeyboardButton(
+        text="\U0001f5d1 Delete Folder", callback_data=f"src:delfolder:{group_id}"
+    )])
+    buttons.append([InlineKeyboardButton(text="\u2b05\ufe0f Back", callback_data="src:list")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def sources_hub_kb(
     orphan_domains: list[dict],
     groups: list[dict],
