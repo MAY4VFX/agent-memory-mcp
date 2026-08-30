@@ -34,6 +34,24 @@ def _depth_to_date(depth: str) -> datetime | None:
     return (now - delta) if delta else None
 
 
+def _should_mark_synced(
+    *, has_messages: bool, last_msg_id: int, min_id: int, widened: bool, since_date
+) -> bool:
+    """Whether this run counts as "the source has been synced at least once".
+
+    Messages — now or on an earlier run — obviously count. A *first* run that
+    reached the end of history and still found nothing counts too: otherwise an
+    empty source keeps ``last_synced_at = NULL`` forever, so every cycle re-opens
+    a takeout session (one per account) and re-scans its whole history, and the
+    bot shows it as "not synced yet" for good.
+    """
+    if has_messages or last_msg_id > 0:
+        return True
+    # First pass with no depth cutoff, or the widened pass that dropped it,
+    # has seen everything there is to see.
+    return min_id == 0 and (widened or since_date is None)
+
+
 class SyncScheduler:
     def __init__(self, collector=None, bot=None) -> None:
         self._running = False
@@ -314,6 +332,7 @@ class SyncScheduler:
             since_date = None
             if min_id == 0 and domain.get("sync_depth"):
                 since_date = _depth_to_date(domain["sync_depth"])
+            widened = False
             async with self._fetch_semaphore:
                 msgs = await collector.fetch_messages(
                     channel_id=domain["channel_id"],
@@ -329,6 +348,7 @@ class SyncScheduler:
                         domain_id=str(domain_id),
                         sync_depth=domain.get("sync_depth"),
                     )
+                    widened = True
                     msgs = await collector.fetch_messages(
                         channel_id=domain["channel_id"],
                         min_id=0,
@@ -439,9 +459,13 @@ class SyncScheduler:
                 entity_count=new_entities,
                 relation_count=new_relations,
             )
-            # Only mark as "synced" if we actually got messages or already had some
-            # (prevents first-time sync with narrow depth from marking channel as done)
-            if msgs or last_msg_id > 0:
+            if _should_mark_synced(
+                has_messages=bool(msgs),
+                last_msg_id=last_msg_id,
+                min_id=min_id,
+                widened=widened,
+                since_date=since_date,
+            ):
                 domain_update["last_synced_at"] = datetime.now(timezone.utc)
             await queries.update_domain(async_engine, domain_id, **domain_update)
 

@@ -368,6 +368,7 @@ class TelegramCollector:
             hit_date_limit = False
 
             # Retry loop for current chunk
+            last_error: Exception | None = None
             for flood_attempt in range(MAX_FLOOD_RETRIES):
                 try:
                     chunk = []
@@ -426,6 +427,7 @@ class TelegramCollector:
                         )
                     break  # chunk fetched successfully
                 except FloodWaitError as e:
+                    last_error = e
                     wait = min(e.seconds + 5, 300)
                     log.warning(
                         "flood_wait",
@@ -448,6 +450,13 @@ class TelegramCollector:
                         await asyncio.sleep(backoff)
                     else:
                         raise
+            else:
+                # Retries exhausted. Returning [] here would be reported as
+                # "channel has no messages" and mark the sync completed —
+                # surface the failure so the job is retried instead.
+                raise last_error or RuntimeError(
+                    f"iter_messages failed for {channel_id} after {MAX_FLOOD_RETRIES} retries"
+                )
 
             results.extend(chunk)
 
