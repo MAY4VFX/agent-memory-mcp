@@ -160,11 +160,29 @@ class SyncScheduler:
             return
 
         try:
-            result = await collector.iter_participants(
-                channel_id=domain["channel_id"],
-                peer_type=peer_type,
-                channel_username=domain.get("channel_username"),
+            # Bounded exactly like the message fetch: a Telethon call that never
+            # returns is not an exception, so `except` below would not catch it —
+            # it would just hold this scheduler slot forever. Three such tasks
+            # deadlocked the whole pipeline once already (issue #21).
+            result = await asyncio.wait_for(
+                collector.iter_participants(
+                    channel_id=domain["channel_id"],
+                    peer_type=peer_type,
+                    channel_username=domain.get("channel_username"),
+                ),
+                settings.scheduler_fetch_timeout,
             )
+        except TimeoutError:
+            log.error(
+                "participants_sync_timeout",
+                domain_id=str(domain_id),
+                timeout=settings.scheduler_fetch_timeout,
+            )
+            result = {
+                "status": "error",
+                "participants": [],
+                "reason": f"iter_participants exceeded {settings.scheduler_fetch_timeout}s",
+            }
         except Exception as e:
             log.exception("participants_sync_unexpected_error", domain_id=str(domain_id))
             result = {"status": "error", "participants": [], "reason": str(e)[:500]}

@@ -17,6 +17,7 @@ Covers:
   unavailable_sources contract that carries the refusal reason through.
 """
 
+import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -355,3 +356,43 @@ class ListParticipantsServiceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParticipantsTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    """Зависший iter_participants не должен держать слот планировщика.
+
+    Ровно тот же класс отказа, что дедлочил синк в issue #21: вызов Telethon,
+    который никогда не возвращается, — это не исключение, поэтому `except` его
+    не поймает. Слот занят навсегда, три таких задачи вешают весь конвейер.
+    """
+
+    async def test_hung_iter_participants_does_not_hold_the_slot(self) -> None:
+        scheduler = SyncScheduler()
+        started = asyncio.Event()
+
+        class _Hanging:
+            async def iter_participants(self, **_kwargs):
+                started.set()
+                await asyncio.sleep(30)
+
+        recorded: dict = {}
+
+        async def _fake_update(_engine, _domain_id, **kwargs):
+            recorded.update(kwargs)
+
+        domain = {
+            "id": uuid4(),
+            "channel_id": 1,
+            "peer_type": "channel",
+            "participants_synced_at": None,
+            "participants_sync_status": None,
+        }
+
+        with patch("agent_memory_mcp.scheduler.scheduler.settings") as s, \
+             patch("agent_memory_mcp.scheduler.scheduler.queries.update_domain", _fake_update):
+            s.scheduler_fetch_timeout = 0.05
+            await scheduler._sync_participants(domain, _Hanging())
+
+        self.assertTrue(started.is_set(), "вызов должен был начаться")
+        self.assertEqual(recorded.get("participants_sync_status"), "error")
+        self.assertIn("exceeded", recorded.get("participants_sync_error", ""))
