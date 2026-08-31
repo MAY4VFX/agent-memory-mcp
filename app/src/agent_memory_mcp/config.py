@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     falkordb_port: int = 6379
     falkordb_password: str  # required — no default, comes from environment
     falkordb_graph: str = "agent_memory_mcp"
+    falkordb_socket_timeout: int = 60
 
     # --- Embedding (TEI) ---
     embedding_url: str = "http://tgkb-embedding-exnntq-embedding-1:8001"

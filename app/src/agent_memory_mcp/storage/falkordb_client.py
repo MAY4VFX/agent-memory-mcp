@@ -47,7 +47,16 @@ class FalkorDBStorage:
         _host = host or settings.falkordb_host
         _port = port or settings.falkordb_port
         _password = password or settings.falkordb_password
-        self._db = FalkorDB(host=_host, port=_port, password=_password)
+        # Without a socket timeout redis-py blocks forever, so a frozen
+        # FalkorDB (alive but not serving) hangs the ingestion task and
+        # holds its scheduler slot until the process restarts.
+        self._db = FalkorDB(
+            host=_host,
+            port=_port,
+            password=_password,
+            socket_timeout=settings.falkordb_socket_timeout,
+            socket_connect_timeout=settings.falkordb_socket_timeout,
+        )
         self._base_name = settings.falkordb_graph
         # Base graph — only for domain-less nodes (e.g. Channel).
         self._graph = self._db.select_graph(self._base_name)
