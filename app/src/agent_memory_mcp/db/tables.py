@@ -79,6 +79,14 @@ domains = Table(
     # Непомеченный источник: его сообщения идут в /activity БЕЗ project-полей,
     # его лейблы не видны в /labels?type=project.
     Column("monitoring", Boolean, server_default="false"),
+    # Состав чата (issue #28): когда последний раз пытались стянуть участников
+    # и с каким результатом. КРИТИЧНО различать "участников нет" (status=ok,
+    # 0 строк в chat_participants) и "не смогли" (status=forbidden/error) —
+    # см. participants_sync_error для причины, которую нужно доносить до
+    # агента, а не молча отдавать пустой список.
+    Column("participants_synced_at", DateTime(timezone=True)),
+    Column("participants_sync_status", String(16)),  # ok | forbidden | not_applicable | error
+    Column("participants_sync_error", Text),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("owner_id", "channel_id"),
 )
@@ -159,6 +167,37 @@ Index(
     messages.c.domain_id,
     messages.c.reply_to_msg_id,
     postgresql_where=messages.c.reply_to_msg_id.isnot(None),
+)
+
+# Chat/group membership (issue #28) — everyone in a chat, whether they ever
+# wrote or not, as opposed to authors derived from messages. Populated via
+# Telethon's iter_participants; see domains.participants_sync_* for whether
+# a given source's rows here are actually complete.
+chat_participants = Table(
+    "chat_participants",
+    metadata,
+    Column(
+        "id",
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column(
+        "domain_id",
+        UUID(as_uuid=True),
+        ForeignKey("domains.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("user_id", BigInteger, nullable=False),
+    # username=NULL is normal — not everyone has one. Never dropped for it.
+    Column("username", String(255)),
+    Column("first_name", String(255)),
+    Column("last_name", String(255)),
+    Column("is_bot", Boolean, server_default="false"),
+    Column("is_admin", Boolean, server_default="false"),
+    Column("first_seen", DateTime(timezone=True), server_default=text("now()")),
+    Column("last_seen", DateTime(timezone=True), server_default=text("now()")),
+    UniqueConstraint("domain_id", "user_id"),
 )
 
 threads = Table(

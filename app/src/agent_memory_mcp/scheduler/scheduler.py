@@ -52,6 +52,35 @@ def _should_mark_synced(
     return min_id == 0 and (widened or since_date is None)
 
 
+_PARTICIPANTS_MIN_INTERVAL = timedelta(hours=24)
+
+
+def _should_sync_participants(
+    *,
+    peer_type: str,
+    participants_synced_at: datetime | None,
+    participants_sync_status: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Whether to (re)pull chat membership on this run — issue #28.
+
+    Not on every sync tick: the first attempt happens the first time a
+    source is seen (``participants_synced_at`` is None), then at most once a
+    day per source regardless of how often messages sync — pulling on every
+    tick across 225 sources would be a needless extra Telegram request per
+    chat per cycle and a direct road to FloodWait.
+
+    ``peer_type="user"`` (1:1 dialogs) has no membership concept at all, so
+    it's recorded ("not_applicable") exactly once and never rechecked.
+    """
+    if peer_type == "user":
+        return participants_sync_status is None
+    if participants_synced_at is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    return now - participants_synced_at >= _PARTICIPANTS_MIN_INTERVAL
+
+
 class SyncScheduler:
     def __init__(self, collector=None, bot=None) -> None:
         self._running = False
@@ -112,6 +141,65 @@ class SyncScheduler:
             return await asyncio.wait_for(collector.fetch_messages(**kwargs), timeout)
         except TimeoutError:
             raise TimeoutError(f"fetch_messages exceeded {timeout}s") from None
+
+    async def _sync_participants(self, domain: dict, collector) -> None:
+        """Refresh a domain's chat-membership snapshot, throttled — issue #28.
+
+        Never raises: a participants failure must never abort message sync.
+        Instead the outcome (including *why* it failed) is recorded on the
+        domain so ``list_participants`` can tell an agent "needs admin
+        rights" instead of silently returning an empty list.
+        """
+        domain_id = domain["id"]
+        peer_type = domain.get("peer_type") or "channel"
+        if not _should_sync_participants(
+            peer_type=peer_type,
+            participants_synced_at=domain.get("participants_synced_at"),
+            participants_sync_status=domain.get("participants_sync_status"),
+        ):
+            return
+
+        try:
+            result = await collector.iter_participants(
+                channel_id=domain["channel_id"],
+                peer_type=peer_type,
+                channel_username=domain.get("channel_username"),
+            )
+        except Exception as e:
+            log.exception("participants_sync_unexpected_error", domain_id=str(domain_id))
+            result = {"status": "error", "participants": [], "reason": str(e)[:500]}
+
+        if result["status"] == "ok" and result["participants"]:
+            try:
+                await queries.bulk_upsert_participants(
+                    async_engine, domain_id, result["participants"],
+                )
+            except Exception:
+                log.exception("participants_upsert_failed", domain_id=str(domain_id))
+                result = {
+                    "status": "error",
+                    "participants": [],
+                    "reason": "не удалось сохранить участников в БД",
+                }
+
+        try:
+            await queries.update_domain(
+                async_engine,
+                domain_id,
+                participants_synced_at=datetime.now(timezone.utc),
+                participants_sync_status=result["status"],
+                participants_sync_error=result.get("reason"),
+            )
+        except Exception:
+            log.exception("participants_domain_update_failed", domain_id=str(domain_id))
+            return
+
+        log.info(
+            "participants_sync_done",
+            domain_id=str(domain_id),
+            status=result["status"],
+            count=len(result["participants"]),
+        )
 
     async def _get_collector_for_domain(self, domain: dict):
         """Get a Telethon client for a domain: global collector or user's session from pool."""
@@ -334,6 +422,10 @@ class SyncScheduler:
             _wrap._folder_cache_ts = 0
             _fetch = _wrap.fetch_messages
             collector = _wrap
+
+        # Chat membership (issue #28) — throttled independently of message
+        # sync, never allowed to fail the run (see _sync_participants).
+        await self._sync_participants(domain, collector)
 
         job = await queries.create_sync_job(async_engine, domain_id, "incremental")
         try:

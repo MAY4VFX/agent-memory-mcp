@@ -11,7 +11,8 @@ mcp = FastMCP(
     instructions=(
         "Agent Memory MCP provides Telegram conversation memory for AI agents. "
         "Use search_memory to find information, get_digest for summaries, "
-        "get_decisions for extracted decisions, and add_source to connect channels. "
+        "get_decisions for extracted decisions, add_source to connect channels, "
+        "and list_participants for a chat's full membership (not just message authors). "
         "IMPORTANT: Call list_scopes FIRST to discover valid scope values "
         "(\"all\", \"folder:Name\", \"@username\") before using get_digest or search_memory. "
         "Requires AGENT_MEMORY_API_KEY and AGENT_MEMORY_URL environment variables."
@@ -87,6 +88,23 @@ async def list_sources() -> str:
     For per-run job detail and errors, call sync_status.
     """
     return await _get_client().list_sources()
+
+
+@mcp.tool()
+async def list_participants(scope: str | None = None) -> str:
+    """List everyone in a chat's membership — not just people who wrote.
+
+    Distinct from message authors: this is Telegram's actual member list,
+    so silent members show up too, with @ники even for people who never
+    posted. Sources where membership could NOT be collected (no admin
+    rights on a broadcast channel, FloodWait, a 1:1 dialog, ...) are listed
+    under `unavailable_sources` with the reason — never conflate that with
+    an empty chat.
+
+    Args:
+        scope: "@channel", "folder:Name", or "all". Call list_scopes to see available options.
+    """
+    return await _get_client().list_participants(scope)
 
 
 @mcp.tool()

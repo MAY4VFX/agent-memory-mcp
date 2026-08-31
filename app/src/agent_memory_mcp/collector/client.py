@@ -8,7 +8,13 @@ import time
 
 import structlog
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError, TakeoutInitDelayError, TakeoutInvalidError
+from telethon.errors import (
+    ChannelPrivateError,
+    ChatAdminRequiredError,
+    FloodWaitError,
+    TakeoutInitDelayError,
+    TakeoutInvalidError,
+)
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Message, PeerChannel
 
@@ -180,6 +186,24 @@ def extract_sender_info(msg: Message) -> dict:
     }
 
 
+def _participant_is_admin(participant) -> bool:
+    """True for an admin/creator participant relation (issue #28).
+
+    Duck-typed on the class name Telethon attaches as `.participant` to each
+    `iter_participants` result, rather than importing every concrete
+    ChannelParticipant*/ChatParticipant* subtype — Telegram's participant
+    type zoo is large and not exhaustively worth naming here.
+    """
+    if participant is None:
+        return False
+    return type(participant).__name__ in {
+        "ChannelParticipantAdmin",
+        "ChannelParticipantCreator",
+        "ChatParticipantAdmin",
+        "ChatParticipantCreator",
+    }
+
+
 def _content_type(msg: Message) -> str:
     if msg.photo:
         return "photo"
@@ -267,44 +291,7 @@ class TelegramCollector:
         Returns:
             List of TelegramMessage objects, oldest-first.
         """
-        if peer_type == "chat":
-            # Basic group: PeerChat needs no access_hash. Refresh dialogs and
-            # retry once on a cold cache.
-            from telethon.tl.types import PeerChat
-            try:
-                entity = await self._client.get_entity(PeerChat(channel_id))
-            except (ValueError, Exception):
-                await self._client.get_dialogs()
-                entity = await self._client.get_entity(PeerChat(channel_id))
-        elif peer_type == "user":
-            # Private 1:1 dialog: PeerUser needs access_hash from the session
-            # cache; refresh dialogs and retry once on a cold cache.
-            from telethon.tl.types import PeerUser
-            try:
-                entity = await self._client.get_entity(PeerUser(channel_id))
-            except (ValueError, Exception):
-                await self._client.get_dialogs()
-                entity = await self._client.get_entity(PeerUser(channel_id))
-        else:
-            # Channel/supergroup: PeerChannel first (fast, uses session cache),
-            # fall back to username, else refresh dialogs and retry.
-            try:
-                entity = await self._client.get_entity(PeerChannel(channel_id))
-            except ValueError:
-                if channel_username:
-                    log.warning(
-                        "peer_channel_cache_miss_fallback_username",
-                        channel_id=channel_id,
-                        username=channel_username,
-                    )
-                    entity = await self._client.get_entity(channel_username)
-                else:
-                    log.warning(
-                        "peer_channel_cache_miss_refresh_dialogs",
-                        channel_id=channel_id,
-                    )
-                    await self._client.get_dialogs()
-                    entity = await self._client.get_entity(PeerChannel(channel_id))
+        entity = await self._resolve_entity(channel_id, peer_type, channel_username)
 
         if use_takeout:
             return await self._fetch_with_takeout(
@@ -313,6 +300,137 @@ class TelegramCollector:
         return await self._paginated_fetch(
             self._client, entity, channel_id, limit, min_id, since_date,
         )
+
+    async def _resolve_entity(
+        self, channel_id: int, peer_type: str, channel_username: str | None,
+    ):
+        """Resolve a stored (channel_id, peer_type) to a Telethon entity.
+
+        Shared by fetch_messages and iter_participants — same PeerChat/
+        PeerUser/PeerChannel resolution with the same cold-cache retry.
+        """
+        if peer_type == "chat":
+            # Basic group: PeerChat needs no access_hash. Refresh dialogs and
+            # retry once on a cold cache.
+            from telethon.tl.types import PeerChat
+            try:
+                return await self._client.get_entity(PeerChat(channel_id))
+            except (ValueError, Exception):
+                await self._client.get_dialogs()
+                return await self._client.get_entity(PeerChat(channel_id))
+        elif peer_type == "user":
+            # Private 1:1 dialog: PeerUser needs access_hash from the session
+            # cache; refresh dialogs and retry once on a cold cache.
+            from telethon.tl.types import PeerUser
+            try:
+                return await self._client.get_entity(PeerUser(channel_id))
+            except (ValueError, Exception):
+                await self._client.get_dialogs()
+                return await self._client.get_entity(PeerUser(channel_id))
+        else:
+            # Channel/supergroup: PeerChannel first (fast, uses session cache),
+            # fall back to username, else refresh dialogs and retry.
+            try:
+                return await self._client.get_entity(PeerChannel(channel_id))
+            except ValueError:
+                if channel_username:
+                    log.warning(
+                        "peer_channel_cache_miss_fallback_username",
+                        channel_id=channel_id,
+                        username=channel_username,
+                    )
+                    return await self._client.get_entity(channel_username)
+                else:
+                    log.warning(
+                        "peer_channel_cache_miss_refresh_dialogs",
+                        channel_id=channel_id,
+                    )
+                    await self._client.get_dialogs()
+                    return await self._client.get_entity(PeerChannel(channel_id))
+
+    async def iter_participants(
+        self,
+        channel_id: int,
+        peer_type: str = "channel",
+        channel_username: str | None = None,
+    ) -> dict:
+        """Fetch full chat/supergroup membership — issue #28.
+
+        Unlike authors derived from messages, this reflects Telegram's actual
+        member list, silent members included. `peer_type="user"` (1:1
+        dialogs) has no membership concept and is reported as
+        "not_applicable" without hitting Telegram.
+
+        CRITICAL (postmortem 2026-08-30): a refusal to enumerate — broadcast
+        channel without admin rights, FloodWait, a privacy restriction — must
+        never come back looking like an empty group. Both `status` and
+        `reason` exist so the caller (and ultimately the agent) can tell
+        "genuinely nobody there" from "couldn't check, here's why".
+
+        Returns:
+            {
+                "status": "ok" | "not_applicable" | "forbidden" | "error",
+                "participants": [{user_id, username, first_name, last_name,
+                                   is_bot, is_admin}, ...],
+                "reason": str | None,  # human-readable cause, set iff status != "ok"
+            }
+        """
+        if peer_type == "user":
+            return {
+                "status": "not_applicable",
+                "participants": [],
+                "reason": "личный диалог — состава участников не существует",
+            }
+
+        try:
+            entity = await self._resolve_entity(channel_id, peer_type, channel_username)
+        except Exception as e:
+            log.warning(
+                "participants_resolve_entity_failed", channel_id=channel_id, error=str(e),
+            )
+            return {
+                "status": "error",
+                "participants": [],
+                "reason": f"не удалось получить чат: {e}",
+            }
+
+        participants: list[dict] = []
+        try:
+            async for user in self._client.iter_participants(entity):
+                participants.append({
+                    "user_id": user.id,
+                    "username": getattr(user, "username", None),
+                    "first_name": getattr(user, "first_name", None),
+                    "last_name": getattr(user, "last_name", None),
+                    "is_bot": bool(getattr(user, "bot", False)),
+                    "is_admin": _participant_is_admin(getattr(user, "participant", None)),
+                })
+        except ChatAdminRequiredError:
+            log.warning("participants_forbidden_admin_required", channel_id=channel_id)
+            return {
+                "status": "forbidden",
+                "participants": [],
+                "reason": "нужны права администратора (обычно broadcast-канал без прав)",
+            }
+        except ChannelPrivateError:
+            log.warning("participants_forbidden_private", channel_id=channel_id)
+            return {
+                "status": "forbidden",
+                "participants": [],
+                "reason": "канал приватный, доступ к участникам запрещён",
+            }
+        except FloodWaitError as e:
+            log.warning("participants_flood_wait", channel_id=channel_id, seconds=e.seconds)
+            return {
+                "status": "error",
+                "participants": [],
+                "reason": f"flood wait {e.seconds}s — Telegram временно ограничил запросы",
+            }
+        except Exception as e:
+            log.exception("participants_fetch_error", channel_id=channel_id)
+            return {"status": "error", "participants": [], "reason": str(e)}
+
+        return {"status": "ok", "participants": participants, "reason": None}
 
     async def _fetch_with_takeout(
         self, entity, channel_id, limit, min_id, since_date,
