@@ -133,6 +133,7 @@ messages = Table(
     Column("thread_id", UUID(as_uuid=True)),
     Column("sender_id", BigInteger),
     Column("sender_name", String(255)),
+    Column("sender_username", String(255)),
     Column("content", Text),
     Column("content_type", String(32), server_default="text"),
     Column("raw_json", JSONB),

@@ -645,7 +645,8 @@ async def read_messages(message_ids: list[str], ctx: Context = None) -> str:
         message_ids: List of message UUIDs from search results.
 
     Returns:
-        Full message content with metadata (sender, date, channel).
+        Full message content with metadata (sender, sender_username, date,
+        channel).
     """
     if not message_ids:
         return _ok({"messages": []})
@@ -657,6 +658,7 @@ async def read_messages(message_ids: list[str], ctx: Context = None) -> str:
             "id": str(r["id"]),
             "content": r.get("content", ""),
             "sender": resolve_sender_label_from_row(r),
+            "sender_username": r.get("sender_username"),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "channel_id": r.get("channel_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),
@@ -729,8 +731,10 @@ async def fetch_messages(
         limit: Page size (default 200, max 1000). Messages come oldest-first.
 
     Returns:
-        JSON with `messages[]` (full content, sender, date, topic_id, url),
-        `count`, and `next_cursor` (null when the last page is reached).
+        JSON with `messages[]` (full content, sender, sender_username, date,
+        topic_id, url), `count`, and `next_cursor` (null when the last page
+        is reached). `sender_username` is the author's @ник, null when they
+        have none or the message predates this field.
     """
     owner_id = await _resolve_owner(ctx)
     try:

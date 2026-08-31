@@ -905,6 +905,7 @@ async def fetch_messages(
             "id": str(r["id"]),
             "content": r.get("content", ""),
             "sender": resolve_sender_label_from_row(r),
+            "sender_username": r.get("sender_username"),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "topic_id": r.get("topic_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),

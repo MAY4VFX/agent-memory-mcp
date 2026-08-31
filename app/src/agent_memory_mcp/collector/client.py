@@ -160,6 +160,26 @@ def extract_fwd_info(msg: Message) -> dict:
     }
 
 
+def extract_sender_info(msg: Message) -> dict:
+    """Display name + @username of a message's direct sender (issue #27).
+
+    Reads ``msg.sender`` — the entity Telethon already resolved for this
+    message in the same ``iter_messages`` page, no extra API call. Unlike
+    ``extract_fwd_info`` this is about who *sent* the message, not who it was
+    originally authored by if forwarded.
+
+    ``username`` is None for the many Telegram users who simply don't have
+    one — that's normal, not a missing-data bug.
+    """
+    sender = getattr(msg, "sender", None)
+    if not sender:
+        return {"sender_name": None, "sender_username": None}
+    return {
+        "sender_name": getattr(sender, "title", None) or getattr(sender, "first_name", None),
+        "sender_username": getattr(sender, "username", None),
+    }
+
+
 def _content_type(msg: Message) -> str:
     if msg.photo:
         return "photo"
@@ -388,11 +408,7 @@ class TelegramCollector:
 
                         last_msg_id = msg.id
 
-                        sender_name = None
-                        if msg.sender:
-                            sender_name = getattr(
-                                msg.sender, "title", None
-                            ) or getattr(msg.sender, "first_name", None)
+                        sender_info = extract_sender_info(msg)
 
                         # Extract topic_id: prefer reply_to_top_id,
                         # fallback to reply_to_msg_id when forum_topic flag is set
@@ -411,7 +427,6 @@ class TelegramCollector:
                                 message_id=msg.id,
                                 channel_id=channel_id,
                                 sender_id=msg.sender_id,
-                                sender_name=sender_name,
                                 text=msg.text or "",
                                 date=msg.date,
                                 reply_to_msg_id=(
@@ -422,6 +437,7 @@ class TelegramCollector:
                                 topic_id=topic_id,
                                 content_type=_content_type(msg),
                                 raw_json=msg.to_dict() if msg.text else None,
+                                **sender_info,
                                 **fwd_info,
                             )
                         )

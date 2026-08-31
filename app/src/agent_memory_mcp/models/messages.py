@@ -18,6 +18,7 @@ class TelegramMessage(BaseModel):
     channel_id: int
     sender_id: int | None = None
     sender_name: str | None = None
+    sender_username: str | None = None
     text: str = ""
     date: datetime
     reply_to_msg_id: int | None = None
@@ -41,6 +42,7 @@ class ProcessedMessage(BaseModel):
     channel_id: int
     sender_id: int | None = None
     sender_name: str | None = None
+    sender_username: str | None = None
     text: str = ""
     date: datetime
     reply_to_msg_id: int | None = None
@@ -106,6 +108,7 @@ def telegram_to_processed(
         channel_id=channel_id or msg.channel_id,
         sender_id=msg.sender_id,
         sender_name=msg.sender_name,
+        sender_username=msg.sender_username,
         text=msg.text,
         date=msg.date,
         reply_to_msg_id=msg.reply_to_msg_id,
@@ -126,6 +129,7 @@ def pg_row_to_processed(row: dict, channel_id: int) -> "ProcessedMessage":
         channel_id=channel_id,
         sender_id=row.get("sender_id"),
         sender_name=row.get("sender_name"),
+        sender_username=row.get("sender_username"),
         text=row.get("content") or "",
         date=row["msg_date"],
         reply_to_msg_id=row.get("reply_to_msg_id"),

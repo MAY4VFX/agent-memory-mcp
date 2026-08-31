@@ -396,6 +396,7 @@ class SyncScheduler:
                         "topic_id": m.topic_id,
                         "sender_id": m.sender_id,
                         "sender_name": m.sender_name,
+                        "sender_username": m.sender_username,
                         "content": m.text,
                         "content_type": m.content_type,
                         "hashtags": tags if tags else None,
