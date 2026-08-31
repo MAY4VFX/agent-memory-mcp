@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     scheduler_check_interval: int = 30
     scheduler_max_concurrent: int = 3
     scheduler_collector_timeout: int = 120
+    scheduler_fetch_timeout: int = 1800
 
     # --- Reranker (TEI) ---
     reranker_url: str = "http://compose-parse-haptic-microchip-b4gwl9-reranker-1:8001"

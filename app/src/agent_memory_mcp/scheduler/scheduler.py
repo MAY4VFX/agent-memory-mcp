@@ -98,6 +98,21 @@ class SyncScheduler:
                 error=str(exc),
             )
 
+    async def _fetch_bounded(self, collector, **kwargs):
+        """Fetch messages under a hard timeout.
+
+        At most ``scheduler_max_concurrent`` syncs run at once. A Telethon call
+        that never returns holds its slot forever, and once every slot is held
+        the scheduler stops starting anything at all — ``eligible=234,
+        started=0`` while nothing progresses. Bounding the fetch turns that
+        deadlock into an ordinary failed job that retries with backoff.
+        """
+        timeout = settings.scheduler_fetch_timeout
+        try:
+            return await asyncio.wait_for(collector.fetch_messages(**kwargs), timeout)
+        except TimeoutError:
+            raise TimeoutError(f"fetch_messages exceeded {timeout}s") from None
+
     async def _get_collector_for_domain(self, domain: dict):
         """Get a Telethon client for a domain: global collector or user's session from pool."""
         if self._collector:
@@ -334,7 +349,8 @@ class SyncScheduler:
                 since_date = _depth_to_date(domain["sync_depth"])
             widened = False
             async with self._fetch_semaphore:
-                msgs = await collector.fetch_messages(
+                msgs = await self._fetch_bounded(
+                    collector,
                     channel_id=domain["channel_id"],
                     min_id=min_id,
                     since_date=since_date,
@@ -349,7 +365,8 @@ class SyncScheduler:
                         sync_depth=domain.get("sync_depth"),
                     )
                     widened = True
-                    msgs = await collector.fetch_messages(
+                    msgs = await self._fetch_bounded(
+                        collector,
                         channel_id=domain["channel_id"],
                         min_id=0,
                         channel_username=domain.get("channel_username"),
