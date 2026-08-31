@@ -45,7 +45,9 @@ mcp = FastMCP(
         "SCOPING: Most tools accept a 'scope' parameter. Call list_scopes FIRST to discover "
         "valid values: \"all\" for everything, \"folder:Name\" for channel groups, \"@username\" "
         "for individual channels.\n\n"
-        "MANAGEMENT: add_source, list_sources, list_scopes, remove_source, list_folders, sync_status, check_telegram_auth"
+        "MANAGEMENT: add_source, list_sources, list_scopes, remove_source, list_folders, sync_status, check_telegram_auth\n\n"
+        "PEOPLE: list_participants gives a chat's full membership (including silent "
+        "members), distinct from authors seen in messages."
     ),
 )
 
@@ -645,7 +647,8 @@ async def read_messages(message_ids: list[str], ctx: Context = None) -> str:
         message_ids: List of message UUIDs from search results.
 
     Returns:
-        Full message content with metadata (sender, date, channel).
+        Full message content with metadata (sender, sender_username, date,
+        channel).
     """
     if not message_ids:
         return _ok({"messages": []})
@@ -657,6 +660,7 @@ async def read_messages(message_ids: list[str], ctx: Context = None) -> str:
             "id": str(r["id"]),
             "content": r.get("content", ""),
             "sender": resolve_sender_label_from_row(r),
+            "sender_username": r.get("sender_username"),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "channel_id": r.get("channel_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),
@@ -729,8 +733,10 @@ async def fetch_messages(
         limit: Page size (default 200, max 1000). Messages come oldest-first.
 
     Returns:
-        JSON with `messages[]` (full content, sender, date, topic_id, url),
-        `count`, and `next_cursor` (null when the last page is reached).
+        JSON with `messages[]` (full content, sender, sender_username, date,
+        topic_id, url), `count`, and `next_cursor` (null when the last page
+        is reached). `sender_username` is the author's @ник, null when they
+        have none or the message predates this field.
     """
     owner_id = await _resolve_owner(ctx)
     try:
@@ -762,6 +768,37 @@ async def list_topics(scope: str | None = None, ctx: Context = None) -> str:
     owner_id = await _resolve_owner(ctx)
     try:
         result = await service.list_topics(owner_id=owner_id, scope=scope)
+    except ScopeNotFound as e:
+        return _scope_not_found_response(e)
+    return _ok(result)
+
+
+@mcp.tool()
+async def list_participants(scope: str | None = None, ctx: Context = None) -> str:
+    """List everyone in a chat's membership — not just people who wrote.
+
+    Different from scanning message authors: this is Telegram's actual
+    member list (collected periodically via iter_participants), so silent
+    members show up too, and it carries @ники even for people who never
+    posted. Deduplicated across every chat in scope — a person seen in
+    several chats appears once, with `channels` listing where.
+
+    Args:
+        scope: "@channel", "folder:Name", or "all". Omit for all sources.
+
+    Returns:
+        JSON with `participants[]` (user_id, username, first_name, last_name,
+        is_bot, channels[]) and `unavailable_sources[]` — sources where
+        membership could NOT be collected, each with a `status`
+        ("not_yet_synced" | "not_applicable" | "forbidden" | "error") and a
+        human `reason`. IMPORTANT: an unavailable source is a refusal, not
+        an empty chat — e.g. "forbidden" on a broadcast channel means it
+        needs admin rights, not that nobody is in it. Never report
+        "участников нет" for a source listed here; report the reason instead.
+    """
+    owner_id = await _resolve_owner(ctx)
+    try:
+        result = await service.list_participants(owner_id=owner_id, scope=scope)
     except ScopeNotFound as e:
         return _scope_not_found_response(e)
     return _ok(result)

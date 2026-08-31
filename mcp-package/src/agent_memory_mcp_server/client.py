@@ -24,7 +24,8 @@ class AgentMemoryClient:
         headers = {"Authorization": f"Bearer {self.key}"}
         async with httpx.AsyncClient(timeout=120) as c:
             if method == "GET":
-                resp = await c.get(f"{self.url}/api/v1/{endpoint}", headers=headers)
+                params = {k: v for k, v in kwargs.items() if v is not None}
+                resp = await c.get(f"{self.url}/api/v1/{endpoint}", headers=headers, params=params)
             else:
                 resp = await c.post(
                     f"{self.url}/api/v1/{endpoint}",
@@ -57,6 +58,9 @@ class AgentMemoryClient:
 
     async def list_sources(self) -> str:
         return await self._request("sources", method="GET")
+
+    async def list_participants(self, scope: str | None = None) -> str:
+        return await self._request("participants", method="GET", scope=scope)
 
     async def list_scopes(self) -> str:
         return await self._request("scopes", method="GET")

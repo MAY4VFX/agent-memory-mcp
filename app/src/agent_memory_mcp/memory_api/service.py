@@ -905,6 +905,7 @@ async def fetch_messages(
             "id": str(r["id"]),
             "content": r.get("content", ""),
             "sender": resolve_sender_label_from_row(r),
+            "sender_username": r.get("sender_username"),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "topic_id": r.get("topic_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),
@@ -953,6 +954,86 @@ async def list_topics(owner_id: int, scope: str | None = None) -> dict:
             "last_date": str(r["last_date"]) if r.get("last_date") else None,
         })
     return {"topics": topics, "count": len(topics)}
+
+
+def _participant_source_label(d: dict) -> str:
+    return f"@{d['channel_username']}" if d.get("channel_username") else (
+        d.get("display_name") or d.get("channel_name") or str(d.get("id"))
+    )
+
+
+async def list_participants(owner_id: int, scope: str | None = None) -> dict:
+    """Full chat membership in scope — everyone in the chat, not just authors.
+
+    Separate tool from list_sources/fetch_messages on purpose (issue #28):
+    unique authors derived from messages miss anyone who never wrote, and
+    have no @ники for anyone who didn't post recently. This reads the
+    ``chat_participants`` snapshot collected by the scheduler via Telethon's
+    iter_participants, deduplicated across every chat in scope.
+
+    CRITICAL: a source where membership could not be enumerated (broadcast
+    channel without admin rights, FloodWait, a 1:1 dialog, privacy) is never
+    folded into an empty result — it's listed under ``unavailable_sources``
+    with the actual reason, so an agent can say "нужны права администратора"
+    instead of "участников нет" (see issue #28 postmortem).
+    """
+    domain_ids = await _resolve_scope(owner_id, scope)
+    if not domain_ids:
+        return {"participants": [], "count": 0, "unavailable_sources": []}
+
+    people: dict[int, dict] = {}
+    unavailable: list[dict] = []
+    for did in domain_ids:
+        d = await db_q.get_domain(async_engine, did)
+        if not d:
+            continue
+        label = _participant_source_label(d)
+        status = d.get("participants_sync_status")
+
+        if status is None:
+            unavailable.append({
+                "source": label,
+                "status": "not_yet_synced",
+                "reason": "состав ещё не собирался (соберётся при следующей синхронизации)",
+            })
+            continue
+        if status != "ok":
+            unavailable.append({
+                "source": label,
+                "status": status,
+                "reason": d.get("participants_sync_error"),
+            })
+            continue
+
+        rows = await db_q.list_participants(async_engine, did)
+        for r in rows:
+            uid = r["user_id"]
+            entry = people.get(uid)
+            if entry is None:
+                entry = {
+                    "user_id": uid,
+                    "username": r.get("username"),
+                    "first_name": r.get("first_name"),
+                    "last_name": r.get("last_name"),
+                    "is_bot": bool(r.get("is_bot")),
+                    "channels": [],
+                }
+                people[uid] = entry
+            # A person can lack a username in one chat's cached row and have
+            # one in another — keep whichever is populated.
+            if not entry.get("username") and r.get("username"):
+                entry["username"] = r.get("username")
+            entry["channels"].append(label)
+
+    participants = sorted(
+        people.values(),
+        key=lambda p: (p.get("username") or "￿", p.get("first_name") or ""),
+    )
+    return {
+        "participants": participants,
+        "count": len(participants),
+        "unavailable_sources": unavailable,
+    }
 
 
 class ScopeNotFound(Exception):

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_memory_mcp.db.tables import (
     channel_schemas,
+    chat_participants,
     domains,
     hashtag_summaries,
     messages,
@@ -217,6 +218,60 @@ async def get_last_message_id(
     async with engine.begin() as conn:
         result = (await conn.execute(stmt)).scalar()
         return result or 0
+
+
+# ---------------------------------------------------------------------------
+# Chat participants (issue #28)
+# ---------------------------------------------------------------------------
+
+async def bulk_upsert_participants(
+    engine: AsyncEngine,
+    domain_id: UUID,
+    participants: list[dict],
+) -> None:
+    """Upsert a domain's membership snapshot.
+
+    Keyed on (domain_id, user_id): a person seen again just refreshes
+    username/names/last_seen — first_seen is left untouched by
+    on_conflict_do_update (not included in `set_`).
+    """
+    if not participants:
+        return
+    now = func.now()
+    rows = [
+        {
+            "domain_id": domain_id,
+            "user_id": p["user_id"],
+            "username": p.get("username"),
+            "first_name": p.get("first_name"),
+            "last_name": p.get("last_name"),
+            "is_bot": p.get("is_bot", False),
+            "is_admin": p.get("is_admin", False),
+        }
+        for p in participants
+    ]
+    stmt = pg_insert(chat_participants)
+    stmt = stmt.on_conflict_do_update(
+        constraint="chat_participants_domain_id_user_id_key",
+        set_={
+            "username": stmt.excluded.username,
+            "first_name": stmt.excluded.first_name,
+            "last_name": stmt.excluded.last_name,
+            "is_bot": stmt.excluded.is_bot,
+            "is_admin": stmt.excluded.is_admin,
+            "last_seen": now,
+        },
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt, rows)
+
+
+async def list_participants(engine: AsyncEngine, domain_id: UUID) -> list[dict]:
+    """All rows collected for one domain (a chat's membership snapshot)."""
+    stmt = select(chat_participants).where(chat_participants.c.domain_id == domain_id)
+    async with engine.begin() as conn:
+        rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

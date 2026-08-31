@@ -46,6 +46,19 @@ async def list_sources(api_key: dict = Depends(verify_api_key)):
     return {"sources": sources, "count": len(sources)}
 
 
+@router.get("/participants")
+async def list_participants(
+    scope: str | None = Query(None, description="all | @channel | folder:Name | domain UUID"),
+    api_key: dict = Depends(verify_api_key),  # Free — reads a periodically-collected snapshot
+):
+    """Full chat membership in scope, deduplicated across chats — see
+    memory_api.service.list_participants for the not-ok-vs-empty contract."""
+    try:
+        return await service.list_participants(api_key["telegram_id"], scope)
+    except ScopeNotFound as e:
+        raise HTTPException(404, {"error": "scope_not_found", "scope": e.scope, "available": e.available})
+
+
 @router.get("/scopes")
 async def list_scopes(api_key: dict = Depends(verify_api_key)):
     """List all available scopes for digest, search, and other tools."""
