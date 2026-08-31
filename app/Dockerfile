@@ -1,4 +1,12 @@
-FROM python:3.12-slim
+# Pinned to the digest of python:3.12-slim already cached on mayfx02 (Debian
+# trixie, post the 2026-08-30 bookworm->trixie tag move that invalidated the apt
+# cache and triggered a full rebuild across all services — that overload took
+# down Milvus/FalkorDB for ~12h, see issue #26). Pinning avoids a silent tag
+# drift causing another surprise full rebuild. To move to a newer base
+# deliberately: `docker pull python:3.12-slim` on mayfx02, take the new digest
+# from `docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}'`,
+# and update this line in its own commit (so a bad bump is easy to revert).
+FROM python:3.12-slim@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17
 
 ENV PYTHONUNBUFFERED=1
 
