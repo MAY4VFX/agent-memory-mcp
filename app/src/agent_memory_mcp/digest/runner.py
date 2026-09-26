@@ -44,6 +44,14 @@ def _format_period(hours: int) -> str:
     return f"последние {days} дн."
 
 
+def _format_stale(names: list[str], limit: int = 10) -> str:
+    """Comma list of stale source names, capped — after a long outage every
+    source is stale and the full list alone overflows a Telegram message."""
+    shown = ", ".join(names[:limit])
+    rest = len(names) - limit
+    return f"{shown} и ещё {rest}" if rest > 0 else shown
+
+
 async def _stale_sources(engine, domain_ids: list) -> list[str]:
     """Names of domains that haven't synced in ~2 sync cycles.
 
@@ -121,7 +129,7 @@ async def run_digest(
                 if stale:
                     text = (
                         f"За {period_label} новых постов нет, но источники не "
-                        f"синхронизировались: {', '.join(stale)}. "
+                        f"синхронизировались: {_format_stale(stale)}. "
                         "Данные могут быть неполными."
                     )
                 else:
@@ -234,7 +242,7 @@ async def run_digest(
             )
             if stale:
                 digest_html = (
-                    f"⚠️ <i>Источники не синхронизировались: {', '.join(stale)} — "
+                    f"⚠️ <i>Источники не синхронизировались: {_format_stale(stale)} — "
                     f"данные могут быть неполными.</i>\n\n" + digest_html
                 )
 
@@ -476,6 +484,41 @@ def _format_digest_html(
     return text.strip()
 
 
+_TG_MAX_LEN = 4096
+
+
+def _split_message(text: str, max_len: int = _TG_MAX_LEN) -> list[str]:
+    """Split text into Telegram-sized chunks: by paragraphs, then lines, then
+    words; hard-cut only as a last resort. A single oversized paragraph must
+    not be sent as is — Telegram rejects it with "message is too long"."""
+    if len(text) <= max_len:
+        return [text]
+    for sep in ("\n\n", "\n", " "):
+        pieces = text.split(sep)
+        if len(pieces) > 1:
+            break
+    else:
+        return [text[i:i + max_len] for i in range(0, len(text), max_len)]
+
+    chunks: list[str] = []
+    current = ""
+    for piece in pieces:
+        if len(piece) > max_len:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_message(piece, max_len))
+        elif len(current) + len(sep) + len(piece) > max_len:
+            if current:
+                chunks.append(current)
+            current = piece
+        else:
+            current = current + sep + piece if current else piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def _send_digest(
     bot: Bot,
     user_id: int,
@@ -483,31 +526,11 @@ async def _send_digest(
     reply_markup=None,
 ) -> None:
     """Send digest as HTML message(s) without link preview, splitting if needed."""
-    MAX_LEN = 4096
-    if len(html_text) <= MAX_LEN:
+    chunks = _split_message(html_text)
+    for i, chunk in enumerate(chunks):
+        # Last chunk gets the reply_markup (prev digest button)
         await bot.send_message(
-            user_id, html_text,
+            user_id, chunk,
             link_preview_options=_NO_PREVIEW,
-            reply_markup=reply_markup,
+            reply_markup=reply_markup if i == len(chunks) - 1 else None,
         )
-    else:
-        # Split at double newlines
-        parts = html_text.split("\n\n")
-        current = ""
-        for part in parts:
-            if len(current) + len(part) + 2 > MAX_LEN:
-                if current:
-                    await bot.send_message(
-                        user_id, current,
-                        link_preview_options=_NO_PREVIEW,
-                    )
-                current = part
-            else:
-                current = current + "\n\n" + part if current else part
-        if current:
-            # Last chunk gets the reply_markup (prev digest button)
-            await bot.send_message(
-                user_id, current,
-                link_preview_options=_NO_PREVIEW,
-                reply_markup=reply_markup,
-            )

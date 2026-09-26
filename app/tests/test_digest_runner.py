@@ -57,5 +57,26 @@ class DigestRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("вайбкодеры", sent_text)
 
 
+class SplitMessageTests(unittest.TestCase):
+    def test_oversized_single_paragraph_is_split(self) -> None:
+        text = "intro\n\n" + ", ".join(f"канал{i}" for i in range(1000))
+        chunks = runner._split_message(text)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(c) <= 4096 for c in chunks))
+        self.assertEqual(" ".join(chunks).split(), text.split())
+
+    def test_short_text_is_one_chunk(self) -> None:
+        self.assertEqual(runner._split_message("hi"), ["hi"])
+
+    def test_unbreakable_text_is_hard_cut(self) -> None:
+        chunks = runner._split_message("x" * 9000)
+        self.assertEqual([len(c) for c in chunks], [4096, 4096, 808])
+
+    def test_stale_list_is_capped(self) -> None:
+        names = [f"c{i}" for i in range(250)]
+        self.assertEqual(runner._format_stale(names[:3]), "c0, c1, c2")
+        self.assertTrue(runner._format_stale(names).endswith("и ещё 240"))
+
+
 if __name__ == "__main__":
     unittest.main()
