@@ -93,6 +93,51 @@ async def update_group(engine: AsyncEngine, group_id: UUID, **kwargs) -> dict | 
         return dict(row) if row else None
 
 
+MIN_SYNC_FREQUENCY_MINUTES = 5  # same floor as memory_api.service._clamp_sync_frequency
+
+
+async def set_group_sync_frequency(
+    engine: AsyncEngine,
+    group_id: UUID,
+    minutes: int,
+    apply_to_members: bool = False,
+) -> dict | None:
+    """Set the folder's sync frequency (floor 5 min). With apply_to_members,
+    also overwrite domains.sync_frequency_minutes of all current members.
+
+    Returns {"group": <row or None>, "minutes": int, "members_updated": int}.
+    """
+    minutes = max(MIN_SYNC_FREQUENCY_MINUTES, int(minutes))
+    async with engine.begin() as conn:
+        grp = (
+            await conn.execute(
+                update(domain_groups)
+                .where(domain_groups.c.id == group_id)
+                .values(sync_frequency_minutes=minutes)
+                .returning(*domain_groups.c)
+            )
+        ).mappings().one_or_none()
+        members_updated = 0
+        if grp is not None and apply_to_members:
+            res = await conn.execute(
+                update(domains)
+                .where(
+                    domains.c.id.in_(
+                        select(domain_group_members.c.domain_id).where(
+                            domain_group_members.c.group_id == group_id
+                        )
+                    )
+                )
+                .values(sync_frequency_minutes=minutes)
+            )
+            members_updated = res.rowcount
+    return {
+        "group": dict(grp) if grp else None,
+        "minutes": minutes,
+        "members_updated": members_updated,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Group members
 # ---------------------------------------------------------------------------

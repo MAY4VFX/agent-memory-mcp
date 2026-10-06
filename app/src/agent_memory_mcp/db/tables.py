@@ -398,6 +398,8 @@ domain_groups = Table(
     Column("emoji", String(8), server_default="'\U0001f4c1'"),
     Column("tg_folder_id", Integer),
     Column("sync_depth", String(8)),
+    # NULL = "use default 60"; applied to chats the listener/import adds from this folder
+    Column("sync_frequency_minutes", Integer, nullable=True),
     Column("is_active", Boolean, server_default="true"),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("owner_id", "name"),

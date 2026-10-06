@@ -120,7 +120,7 @@ async def _resync_folders(uc, telegram_id: int) -> None:
                     channel_username=p.get("username", ""),
                     channel_name=p["title"],
                     sync_depth=g.get("sync_depth") or "3m",
-                    sync_frequency_minutes=60,
+                    sync_frequency_minutes=g.get("sync_frequency_minutes") or 60,
                     emoji="📁",
                     display_name=p["title"],
                     pinned=False,
