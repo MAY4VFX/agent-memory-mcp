@@ -335,6 +335,12 @@ async def _add_folder(
             sync_depth=sync_range,
         )
 
+    # A per-folder frequency (set on the group) wins over the call argument;
+    # NULL on the group = use the argument. Same floor as every other source.
+    if group.get("sync_frequency_minutes"):
+        sync_frequency_minutes = group["sync_frequency_minutes"]
+    sync_frequency_minutes = _clamp_sync_frequency(sync_frequency_minutes)
+
     # Add each channel
     existing = await db_q.list_domains(async_engine, owner_id)
     existing_cids = {d["channel_id"]: d["id"] for d in existing}
