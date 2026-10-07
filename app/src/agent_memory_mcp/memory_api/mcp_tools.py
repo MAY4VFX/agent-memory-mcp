@@ -734,9 +734,11 @@ async def fetch_messages(
 
     Returns:
         JSON with `messages[]` (full content, sender, sender_username, date,
-        topic_id, url), `count`, and `next_cursor` (null when the last page
+        topic_id, telegram_msg_id, reply_to_msg_id, url), `count`, and `next_cursor` (null when the last page
         is reached). `sender_username` is the author's @ник, null when they
-        have none or the message predates this field.
+        have none or the message predates this field. `reply_to_msg_id` is the
+        Telegram id (`telegram_msg_id`) of the message this one replies to in
+        the same chat, null if it is not a reply.
     """
     owner_id = await _resolve_owner(ctx)
     try:

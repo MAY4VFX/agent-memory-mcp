@@ -915,6 +915,7 @@ async def fetch_messages(
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "topic_id": r.get("topic_id"),
             "telegram_msg_id": r.get("telegram_msg_id"),
+            "reply_to_msg_id": r.get("reply_to_msg_id"),
             "channel_id": channel_id,
             "url": url or None,
         })

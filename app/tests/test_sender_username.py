@@ -174,5 +174,34 @@ class FetchMessagesExposesSenderUsernameTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["messages"][0]["sender_username"])
 
 
+class FetchMessagesExposesReplyToTests(unittest.IsolatedAsyncioTestCase):
+    """fetch_messages() must return reply_to_msg_id (who replies to whom)."""
+
+    async def test_reply_to_msg_id_in_output(self) -> None:
+        domain_id = uuid4()
+
+        def mk(tg_id: int, reply_to):
+            return {
+                "id": uuid4(), "domain_id": domain_id, "telegram_msg_id": tg_id,
+                "sender_id": 42, "sender_name": "A", "sender_username": None,
+                "content": "x", "topic_id": None, "reply_to_msg_id": reply_to,
+                "msg_date": datetime(2026, 8, 31, tzinfo=timezone.utc),
+            }
+
+        rows = [mk(101, None), mk(102, 101), mk(103, None)]
+        domain = {"id": domain_id, "channel_username": "somechat", "channel_id": 999}
+        with patch.object(
+            service, "_resolve_scope", AsyncMock(return_value=[domain_id]),
+        ), patch.object(
+            service.db_q, "get_messages_filtered", AsyncMock(return_value=rows),
+        ), patch.object(
+            service.db_q, "get_domain", AsyncMock(return_value=domain),
+        ):
+            result = await service.fetch_messages(owner_id=1, scope="@somechat")
+
+        got = [m["reply_to_msg_id"] for m in result["messages"]]
+        self.assertEqual(got, [None, 101, None])
+
+
 if __name__ == "__main__":
     unittest.main()
