@@ -81,6 +81,45 @@ def _should_sync_participants(
     return now - participants_synced_at >= _PARTICIPANTS_MIN_INTERVAL
 
 
+_TOPICS_REFRESH_INTERVAL = timedelta(hours=6)      # forum: catch renames
+_TOPICS_NEW_TOPIC_INTERVAL = timedelta(minutes=15)  # forum: unknown topic seen
+_TOPICS_ERROR_RETRY = timedelta(hours=1)
+_TOPICS_NOT_FORUM_RECHECK = timedelta(hours=24)     # a group may turn forum on
+
+
+def _should_sync_topics(
+    *,
+    peer_type: str,
+    synced_at: datetime | None,
+    status: str | None,
+    has_unknown_topics: bool = False,
+    now: datetime | None = None,
+) -> bool:
+    """Whether to (re)pull real forum topic titles on this run.
+
+    Not on every sync tick (one GetForumTopics request per chat per cycle over
+    hundreds of sources is a road to FloodWait):
+    - never pulled yet → now (this is also the post-deploy backfill);
+    - a forum (status ok) → every 6h to pick up renames, or after 15 min when
+      freshly synced messages carry a topic_id with no stored title (new topic);
+    - not a forum → once a day (forum mode can be switched on later);
+    - last attempt failed → retry after 1h.
+    Basic groups / 1:1 dialogs can't have topics — never asked.
+    """
+    if peer_type != "channel":
+        return False
+    if synced_at is None:
+        return True
+    elapsed = (now or datetime.now(timezone.utc)) - synced_at
+    if status == "ok":
+        if has_unknown_topics:
+            return elapsed >= _TOPICS_NEW_TOPIC_INTERVAL
+        return elapsed >= _TOPICS_REFRESH_INTERVAL
+    if status == "not_applicable":
+        return elapsed >= _TOPICS_NOT_FORUM_RECHECK
+    return elapsed >= _TOPICS_ERROR_RETRY
+
+
 class SyncScheduler:
     def __init__(self, collector=None, bot=None) -> None:
         self._running = False
@@ -218,6 +257,73 @@ class SyncScheduler:
             status=result["status"],
             count=len(result["participants"]),
         )
+
+    async def _sync_forum_topics(
+        self, domain: dict, collector, topic_ids: set[int] | None = None,
+    ) -> None:
+        """Refresh a chat's real forum topic titles, throttled.
+
+        ``topic_ids`` — topic ids seen in the messages just synced; one without
+        a stored title means a new topic and shortens the throttle. Never
+        raises: titles are an enrichment, a failure must not fail the sync.
+        """
+        domain_id = domain["id"]
+        peer_type = domain.get("peer_type") or "channel"
+        channel_id = domain["channel_id"]
+        if peer_type != "channel":
+            return
+        try:
+            has_unknown = False
+            if topic_ids and domain.get("forum_topics_sync_status") == "ok":
+                known = await queries.get_known_topic_ids(
+                    async_engine, channel_id, sorted(topic_ids),
+                )
+                has_unknown = bool(set(topic_ids) - known)
+            if not _should_sync_topics(
+                peer_type=peer_type,
+                synced_at=domain.get("forum_topics_synced_at"),
+                status=domain.get("forum_topics_sync_status"),
+                has_unknown_topics=has_unknown,
+            ):
+                return
+
+            fetch = getattr(collector, "fetch_forum_topics", None)
+            if fetch is None:
+                return
+            try:
+                # Bounded like every other Telethon call here (issue #21).
+                result = await asyncio.wait_for(
+                    fetch(
+                        channel_id=channel_id,
+                        peer_type=peer_type,
+                        channel_username=domain.get("channel_username"),
+                    ),
+                    settings.scheduler_fetch_timeout,
+                )
+            except TimeoutError:
+                result = {
+                    "status": "error", "topics": [],
+                    "reason": f"fetch_forum_topics exceeded {settings.scheduler_fetch_timeout}s",
+                }
+
+            if result.get("status") == "ok" and result.get("topics"):
+                await queries.upsert_forum_topics(async_engine, channel_id, result["topics"])
+
+            await queries.update_domain(
+                async_engine,
+                domain_id,
+                forum_topics_synced_at=datetime.now(timezone.utc),
+                forum_topics_sync_status=result.get("status") or "error",
+            )
+            log.info(
+                "forum_topics_sync_done",
+                domain_id=str(domain_id),
+                status=result.get("status"),
+                count=len(result.get("topics") or []),
+                reason=result.get("reason"),
+            )
+        except Exception:
+            log.exception("forum_topics_sync_failed", domain_id=str(domain_id))
 
     async def _get_collector_for_domain(self, domain: dict):
         """Get a Telethon client for a domain: global collector or user's session from pool."""
@@ -596,6 +702,12 @@ class SyncScheduler:
             ):
                 domain_update["last_synced_at"] = datetime.now(timezone.utc)
             await queries.update_domain(async_engine, domain_id, **domain_update)
+
+            # Real forum topic titles — throttled, never fails the run.
+            await self._sync_forum_topics(
+                domain, collector,
+                topic_ids={m.topic_id for m in msgs if m.topic_id is not None},
+            )
 
             # First successful sync of a new source → queue owner for auto-classify.
             if msgs and not domain.get("last_synced_at"):

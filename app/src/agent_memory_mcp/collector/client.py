@@ -204,6 +204,21 @@ def _participant_is_admin(participant) -> bool:
     }
 
 
+def _forum_topics_request():
+    """(request class, peer kwarg name) for listing forum topics.
+
+    Newer Telegram layers moved the call to ``messages.GetForumTopicsRequest``
+    (``peer=``); older Telethon builds only have
+    ``channels.GetForumTopicsRequest`` (``channel=``). Support both so the
+    requirements range (telethon>=1.37,<2) keeps working.
+    """
+    from telethon.tl.functions import channels as _ch
+    from telethon.tl.functions import messages as _msgs
+    if hasattr(_msgs, "GetForumTopicsRequest"):
+        return _msgs.GetForumTopicsRequest, "peer"
+    return _ch.GetForumTopicsRequest, "channel"
+
+
 def _content_type(msg: Message) -> str:
     if msg.photo:
         return "photo"
@@ -431,6 +446,104 @@ class TelegramCollector:
             return {"status": "error", "participants": [], "reason": str(e)}
 
         return {"status": "ok", "participants": participants, "reason": None}
+
+    _FORUM_TOPICS_PAGE = 100
+    _FORUM_TOPICS_MAX_PAGES = 10  # ≤1000 topics per refresh — never a runaway loop
+
+    async def fetch_forum_topics(
+        self,
+        channel_id: int,
+        peer_type: str = "channel",
+        channel_username: str | None = None,
+    ) -> dict:
+        """Real titles of a forum supergroup's topics (GetForumTopicsRequest).
+
+        Only channel-type peers whose entity has ``forum=True`` are asked;
+        anything else is ``not_applicable`` without a topics request. A refusal
+        or FloodWait comes back as ``status="error"`` with a reason — never as
+        an empty "no topics" list, and never raised into the sync.
+
+        Returns:
+            {
+                "status": "ok" | "not_applicable" | "error",
+                "topics": [{topic_id, title, is_closed}, ...],
+                "reason": str | None,
+            }
+        """
+        if peer_type != "channel":
+            return {
+                "status": "not_applicable",
+                "topics": [],
+                "reason": "не супергруппа — тем форума не бывает",
+            }
+        try:
+            entity = await self._resolve_entity(channel_id, peer_type, channel_username)
+        except Exception as e:
+            log.warning("forum_topics_resolve_entity_failed", channel_id=channel_id, error=str(e))
+            return {"status": "error", "topics": [], "reason": f"не удалось получить чат: {e}"}
+        if not getattr(entity, "forum", False):
+            return {
+                "status": "not_applicable",
+                "topics": [],
+                "reason": "чат без режима тем (forum)",
+            }
+
+        request_cls, peer_kw = _forum_topics_request()
+        topics: list[dict] = []
+        seen: set[int] = set()
+        offset_date, offset_id, offset_topic = None, 0, 0
+        try:
+            for _ in range(self._FORUM_TOPICS_MAX_PAGES):
+                res = await self._client(request_cls(
+                    **{peer_kw: entity},
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=self._FORUM_TOPICS_PAGE,
+                ))
+                page = list(getattr(res, "topics", None) or [])
+                msg_dates = {
+                    getattr(m, "id", None): getattr(m, "date", None)
+                    for m in (getattr(res, "messages", None) or [])
+                }
+                new_on_page = 0
+                for t in page:
+                    tid = getattr(t, "id", None)
+                    title = getattr(t, "title", None)  # ForumTopicDeleted has none
+                    if tid is None or tid in seen:
+                        continue
+                    seen.add(tid)
+                    new_on_page += 1
+                    if title and not getattr(t, "title_missing", False):
+                        topics.append({
+                            "topic_id": tid,
+                            "title": title,
+                            "is_closed": bool(getattr(t, "closed", False)),
+                        })
+                if len(page) < self._FORUM_TOPICS_PAGE or new_on_page == 0:
+                    break
+                last = page[-1]
+                offset_topic = getattr(last, "id", 0) or 0
+                offset_id = getattr(last, "top_message", 0) or 0
+                offset_date = msg_dates.get(offset_id) or getattr(last, "date", None)
+                await asyncio.sleep(1.0)
+        except FloodWaitError as e:
+            # Telethon already sleeps through short waits (flood_sleep_threshold);
+            # a long one ends this refresh — the scheduler retries later.
+            log.warning("forum_topics_flood_wait", channel_id=channel_id, seconds=e.seconds)
+            return {
+                "status": "error",
+                "topics": [],
+                "reason": f"flood wait {e.seconds}s — Telegram временно ограничил запросы",
+            }
+        except (ChannelPrivateError, ChatAdminRequiredError) as e:
+            log.warning("forum_topics_forbidden", channel_id=channel_id, error=str(e))
+            return {"status": "error", "topics": [], "reason": f"нет доступа к темам: {e}"}
+        except Exception as e:
+            log.exception("forum_topics_fetch_error", channel_id=channel_id)
+            return {"status": "error", "topics": [], "reason": str(e)[:500]}
+
+        return {"status": "ok", "topics": topics, "reason": None}
 
     async def _fetch_with_takeout(
         self, entity, channel_id, limit, min_id, since_date,

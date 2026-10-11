@@ -734,8 +734,9 @@ async def fetch_messages(
 
     Returns:
         JSON with `messages[]` (full content, sender, sender_username, date,
-        topic_id, telegram_msg_id, reply_to_msg_id, url), `count`, and `next_cursor` (null when the last page
-        is reached). `sender_username` is the author's @ник, null when they
+        topic_id, topic_name, telegram_msg_id, reply_to_msg_id, url), `count`, and `next_cursor` (null when the last page
+        is reached). `topic_name` is the real Telegram forum-topic title, null
+        when the message is outside a topic or the title isn't collected yet. `sender_username` is the author's @ник, null when they
         have none or the message predates this field. `reply_to_msg_id` is the
         Telegram id (`telegram_msg_id`) of the message this one replies to in
         the same chat, null if it is not a reply.
@@ -757,15 +758,19 @@ async def list_topics(scope: str | None = None, ctx: Context = None) -> str:
     """List supergroup forum topics in a chat, so you can filter by `topic_id`.
 
     Telegram supergroups split conversation into topics; messages carry a
-    `topic_id`. Call this to discover the topics (id, recovered name, message
-    count, date range) before passing `topic_id` to fetch_messages /
-    keyword_search / vector_search.
+    `topic_id`. Call this to discover the topics (id, name, message count,
+    date range) before passing `topic_id` to fetch_messages /
+    keyword_search / vector_search. Topics in one chat are often different
+    projects — use `name` to tell them apart.
 
     Args:
         scope: "@channel", "folder:Name", or "all". Omit for all sources.
 
     Returns:
-        JSON with `topics[]` (topic_id, name, message_count, channel, date range).
+        JSON with `topics[]` (topic_id, name, name_source, message_count,
+        channel, channel_id, date range). `name_source` is "telegram" when
+        `name` is the real topic title, "first_message" when it's only a
+        fallback guess from the topic's first message text, null when unknown.
     """
     owner_id = await _resolve_owner(ctx)
     try:

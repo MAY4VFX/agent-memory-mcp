@@ -87,6 +87,10 @@ domains = Table(
     Column("participants_synced_at", DateTime(timezone=True)),
     Column("participants_sync_status", String(16)),  # ok | forbidden | not_applicable | error
     Column("participants_sync_error", Text),
+    # Названия тем форума (migration 023): когда последний раз тянули
+    # GetForumTopics и с каким итогом — троттлинг, а не запрос на каждом тике.
+    Column("forum_topics_synced_at", DateTime(timezone=True)),
+    Column("forum_topics_sync_status", String(16)),  # ok | not_applicable | error
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("owner_id", "channel_id"),
 )
@@ -198,6 +202,22 @@ chat_participants = Table(
     Column("first_seen", DateTime(timezone=True), server_default=text("now()")),
     Column("last_seen", DateTime(timezone=True), server_default=text("now()")),
     UniqueConstraint("domain_id", "user_id"),
+)
+
+# Real supergroup forum topic titles (migration 023), from Telegram's
+# channels.GetForumTopicsRequest. Keyed by the bare chat id (same value as
+# domains.channel_id) + topic_id, so one chat connected by several owners
+# shares one set of titles. updated_at moves on rename.
+forum_topics = Table(
+    "forum_topics",
+    metadata,
+    Column("channel_id", BigInteger, nullable=False),
+    Column("topic_id", BigInteger, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("is_closed", Boolean, server_default="false"),
+    Column("created_at", DateTime(timezone=True), server_default=text("now()")),
+    Column("updated_at", DateTime(timezone=True), server_default=text("now()")),
+    PrimaryKeyConstraint("channel_id", "topic_id"),
 )
 
 threads = Table(

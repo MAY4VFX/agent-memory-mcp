@@ -901,6 +901,10 @@ async def fetch_messages(
         if d:
             dmap[d["id"]] = (d.get("channel_username"), d.get("channel_id"))
 
+    titles = await _topic_titles_for_rows(
+        rows, {did: cid for did, (_u, cid) in dmap.items()},
+    )
+
     out = []
     for r in rows:
         username, channel_id = dmap.get(r["domain_id"], (None, None))
@@ -914,6 +918,7 @@ async def fetch_messages(
             "sender_username": r.get("sender_username"),
             "date": str(r["msg_date"]) if r.get("msg_date") else None,
             "topic_id": r.get("topic_id"),
+            "topic_name": titles.get((channel_id, r.get("topic_id"))),
             "telegram_msg_id": r.get("telegram_msg_id"),
             "reply_to_msg_id": r.get("reply_to_msg_id"),
             "channel_id": channel_id,
@@ -933,10 +938,37 @@ async def fetch_messages(
     }
 
 
+async def _topic_titles_for_rows(
+    rows: list[dict], domain_channel: dict,
+) -> dict[tuple[int, int], str]:
+    """Real forum topic titles for the chats these message rows come from.
+
+    ``domain_channel`` maps domain_id → bare channel_id. Only chats that have a
+    topic_id among ``rows`` are looked up. Titles are an enrichment: a lookup
+    failure yields ``{}`` (→ ``topic_name: null``), never a failed request.
+    """
+    channel_ids = {
+        domain_channel.get(r.get("domain_id"))
+        for r in rows
+        if r.get("topic_id") is not None
+    }
+    channel_ids.discard(None)
+    if not channel_ids:
+        return {}
+    try:
+        return await db_q.get_topic_titles(async_engine, sorted(channel_ids))
+    except Exception:
+        log.warning("topic_titles_lookup_failed", exc_info=True)
+        return {}
+
+
 async def list_topics(owner_id: int, scope: str | None = None) -> dict:
     """List supergroup forum topics so an agent can pick a ``topic_id`` to filter by.
 
-    Topic names are recovered from each topic's root message where available.
+    ``name`` is the real Telegram topic title when collected
+    (``name_source="telegram"``); otherwise the legacy fallback — the text of
+    the topic's root message, which for most real topics is just the first
+    reply (``name_source="first_message"``) — or null (``name_source=null``).
     """
     domain_ids = await _resolve_scope(owner_id, scope)
     if not domain_ids:
@@ -946,17 +978,25 @@ async def list_topics(owner_id: int, scope: str | None = None) -> dict:
     for did in domain_ids:
         d = await db_q.get_domain(async_engine, did)
         if d:
-            dmap[d["id"]] = d.get("channel_username")
+            dmap[d["id"]] = (d.get("channel_username"), d.get("channel_id"))
 
     rows = await db_q.get_topics(async_engine, domain_ids)
     topics = []
     for r in rows:
-        name = (r.get("topic_name") or "").strip().replace("\n", " ")
+        username, channel_id = dmap.get(r["domain_id"], (None, None))
+        title = (r.get("topic_title") or "").strip()
+        if title:
+            name, name_source = title, "telegram"
+        else:
+            fallback = (r.get("topic_name") or "").strip().replace("\n", " ")[:80]
+            name, name_source = (fallback or None), ("first_message" if fallback else None)
         topics.append({
             "topic_id": r["topic_id"],
-            "name": (name[:80] or None),
+            "name": name,
+            "name_source": name_source,
             "message_count": r.get("message_count", 0),
-            "channel": (f"@{dmap.get(r['domain_id'])}" if dmap.get(r["domain_id"]) else None),
+            "channel": (f"@{username}" if username else None),
+            "channel_id": channel_id,
             "first_date": str(r["first_date"]) if r.get("first_date") else None,
             "last_date": str(r["last_date"]) if r.get("last_date") else None,
         })
@@ -1129,6 +1169,9 @@ async def get_activity(
     rows = await db_q.get_activity_events(
         async_engine, domain_ids, since, until, after_date, after_id, limit
     )
+    titles = await _topic_titles_for_rows(
+        rows, {did: m.get("chat_id") for did, m in dmap.items()},
+    )
 
     events = []
     for r in rows:
@@ -1149,6 +1192,7 @@ async def get_activity(
                 "content_type": r.get("content_type"),
                 "reply_to_msg_id": r.get("reply_to_msg_id"),
                 "topic_id": r.get("topic_id"),
+                "topic_name": titles.get((meta.get("chat_id"), r.get("topic_id"))),
                 "thread_id": str(r["thread_id"]) if r.get("thread_id") else None,
                 "telegram_msg_id": r.get("telegram_msg_id"),
                 # Classification from the chat classifier: every chat is labelled

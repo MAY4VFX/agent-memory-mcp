@@ -12,6 +12,7 @@ from agent_memory_mcp.db.tables import (
     channel_schemas,
     chat_participants,
     domains,
+    forum_topics,
     hashtag_summaries,
     messages,
     sync_jobs,
@@ -272,6 +273,85 @@ async def list_participants(engine: AsyncEngine, domain_id: UUID) -> list[dict]:
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Forum topic titles (migration 023)
+# ---------------------------------------------------------------------------
+
+async def upsert_forum_topics(
+    engine: AsyncEngine,
+    channel_id: int,
+    topics: list[dict],
+) -> None:
+    """Upsert a chat's real forum topic titles, keyed on (channel_id, topic_id).
+
+    A rename (or close/reopen) rewrites the row and bumps ``updated_at``; an
+    unchanged topic is left alone so ``updated_at`` means "title last changed".
+    Topics that vanished from Telegram (deleted) are kept: old messages still
+    reference them and the last known title is better than none.
+    """
+    rows = [
+        {
+            "channel_id": channel_id,
+            "topic_id": int(t["topic_id"]),
+            "title": t["title"],
+            "is_closed": bool(t.get("is_closed", False)),
+        }
+        for t in topics
+        if t.get("topic_id") is not None and t.get("title")
+    ]
+    if not rows:
+        return
+    stmt = pg_insert(forum_topics)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[forum_topics.c.channel_id, forum_topics.c.topic_id],
+        set_={
+            "title": stmt.excluded.title,
+            "is_closed": stmt.excluded.is_closed,
+            "updated_at": func.now(),
+        },
+        where=or_(
+            forum_topics.c.title.is_distinct_from(stmt.excluded.title),
+            forum_topics.c.is_closed.is_distinct_from(stmt.excluded.is_closed),
+        ),
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt, rows)
+
+
+async def get_known_topic_ids(
+    engine: AsyncEngine,
+    channel_id: int,
+    topic_ids: list[int],
+) -> set[int]:
+    """Which of ``topic_ids`` already have a stored title for this chat."""
+    if not topic_ids:
+        return set()
+    stmt = select(forum_topics.c.topic_id).where(
+        forum_topics.c.channel_id == channel_id,
+        forum_topics.c.topic_id.in_(list(topic_ids)),
+    )
+    async with engine.begin() as conn:
+        return {r[0] for r in (await conn.execute(stmt)).all()}
+
+
+async def get_topic_titles(
+    engine: AsyncEngine,
+    channel_ids: list[int],
+) -> dict[tuple[int, int], str]:
+    """``{(channel_id, topic_id): title}`` for every stored topic of these chats."""
+    ids = [c for c in set(channel_ids) if c is not None]
+    if not ids:
+        return {}
+    stmt = select(
+        forum_topics.c.channel_id, forum_topics.c.topic_id, forum_topics.c.title,
+    ).where(forum_topics.c.channel_id.in_(ids))
+    async with engine.begin() as conn:
+        return {
+            (r.channel_id, r.topic_id): r.title
+            for r in (await conn.execute(stmt)).all()
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1076,9 +1156,10 @@ async def get_topics(
 ) -> list[dict]:
     """List forum topics seen across domains: topic_id, count, date range, name.
 
-    Topic names are not stored separately — Telegram makes the topic id equal to
-    its root ("topic created") message id, so we recover a human-readable name
-    from that root message's content where available.
+    ``topic_title`` is the real Telegram title from ``forum_topics`` (NULL when
+    not collected yet). ``topic_name`` is the legacy fallback: Telegram makes the
+    topic id equal to its root ("topic created") message id, so the root
+    message's content — when that message was stored — stands in for a name.
 
     Returns topics sorted by recency (most recent activity first).
     """
@@ -1094,11 +1175,17 @@ async def get_topics(
                        COUNT(*)            AS message_count,
                        MIN(m.msg_date)     AS first_date,
                        MAX(m.msg_date)     AS last_date,
-                       MAX(root.content)   AS topic_name
+                       MAX(root.content)   AS topic_name,
+                       MAX(ft.title)       AS topic_title
                 FROM messages m
                 LEFT JOIN messages root
                   ON root.domain_id = m.domain_id
                  AND root.telegram_msg_id = m.topic_id
+                LEFT JOIN domains d
+                  ON d.id = m.domain_id
+                LEFT JOIN forum_topics ft
+                  ON ft.channel_id = d.channel_id
+                 AND ft.topic_id = m.topic_id
                 WHERE m.domain_id = ANY(:ids)
                   AND m.topic_id IS NOT NULL
                   AND m.is_noise = FALSE
