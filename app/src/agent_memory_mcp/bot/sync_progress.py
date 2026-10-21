@@ -35,8 +35,10 @@ def render_status(label: str, job: dict | None, queue_ahead: int | None = None) 
         ahead = f" — {queue_ahead} ahead" if queue_ahead else ""
         return f"⏳ <b>{name}</b>: queued for sync{ahead}", False
     if job["status"] == "running":
+        # messages_fetched defaults to 0 and is written once the download
+        # ends, so 0 while running means «still downloading», not «0 found».
         fetched = job.get("messages_fetched")
-        if fetched is None:
+        if not fetched:
             return f"📥 <b>{name}</b>: downloading messages…", False
         return f"⚙️ <b>{name}</b>: processing {fetched} messages…", False
     if job["status"] == "completed":
