@@ -199,7 +199,7 @@ async def src_bylink(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(AddSourceStates.waiting_input)
+@router.message(AddSourceStates.waiting_input, F.text)
 async def on_source_input(message: Message, state: FSMContext) -> None:
     await state.clear()
     lines = [l.strip() for l in (message.text or "").splitlines() if l.strip()]
@@ -315,7 +315,7 @@ async def start_create_group(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(GroupStates.entering_name)
 
 
-@router.message(GroupStates.entering_name)
+@router.message(GroupStates.entering_name, F.text)
 async def create_group_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()[:255]
     if not name:
