@@ -6,9 +6,10 @@ makes Telegram auto-create a topic for it, so /start or a keyboard press can
 arrive as the first message of a brand-new topic. Left alone, every press
 spawns a junk topic and the answer lands there.
 
-MenuTopicMiddleware moves menu traffic to the main thread: the junk topic a
-menu message opened is deleted and the message is handled as if sent in the
-main thread. Free text in the main thread opens a dialog topic (forum.py);
+MenuTopicMiddleware moves such menu traffic to the main thread: the junk
+topic a menu message opened is deleted and the message is handled as if sent
+in the main thread. A menu press inside an existing topic is answered in that
+topic — that is where the user is looking. Free text in the main thread opens a dialog topic (forum.py);
 free text in a topic is that topic's dialog with the agent.
 """
 
@@ -74,7 +75,7 @@ async def drop_legacy_home_topic(bot: Bot, user_id: int, chat_id: int) -> None:
 
 
 class MenuTopicMiddleware(BaseMiddleware):
-    """Route menu messages to the main thread and drop the junk topics they opened.
+    """Move menu messages out of the junk topics they opened, into the main thread.
 
     Needs the dispatcher's FSM strategy USER_IN_TOPIC: a flow started in the
     main thread (key name, auth code, add-source link) must not capture
@@ -107,16 +108,19 @@ class MenuTopicMiddleware(BaseMiddleware):
             is_topic=event.is_topic_message,
             menu=menu,
         )
-        if not menu or event.message_thread_id is None:
+        # A menu press inside an existing topic is answered right there: the
+        # user is looking at that topic, and an answer sent to the main thread
+        # looks like "the button does nothing" (real case: «📡 Sources» pressed
+        # in the friend's «@novchenkova» topic, answers went to the main thread).
+        if not menu or not is_fresh_topic(event):
             return await handler(event, await _drop_stale_flow(event, data))
 
         bot: Bot = data["bot"]
         topic = event.message_thread_id
-        if is_fresh_topic(event):
-            try:
-                await bot.delete_forum_topic(chat_id=event.chat.id, message_thread_id=topic)
-            except TelegramBadRequest:
-                log.warning("junk_topic_delete_failed", user_id=event.from_user.id, thread_id=topic)
+        try:
+            await bot.delete_forum_topic(chat_id=event.chat.id, message_thread_id=topic)
+        except TelegramBadRequest:
+            log.warning("junk_topic_delete_failed", user_id=event.from_user.id, thread_id=topic)
 
         log.info("menu_message_rerouted", user_id=event.from_user.id, from_thread=topic)
         rerouted = event.model_copy(

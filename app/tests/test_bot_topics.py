@@ -99,11 +99,13 @@ class MiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.bot.delete_forum_topic.assert_not_awaited()
         self.assertIsNone(event.message_thread_id)
 
-    async def test_button_inside_dialog_topic_answers_in_main_keeps_topic(self) -> None:
-        event, _ = await self._run(_msg("💰 Balance", 530, 500))
+    async def test_button_inside_existing_topic_is_answered_there(self) -> None:
+        # Real case: «📡 Sources» pressed in the «@novchenkova» topic; answers
+        # sent to the main thread looked like the button did nothing.
+        event, _ = await self._run(_msg("📡 Sources", 1113, 316241))
 
         self.bot.delete_forum_topic.assert_not_awaited()
-        self.assertIsNone(event.message_thread_id)
+        self.assertEqual(event.message_thread_id, 316241)
 
     async def test_question_in_new_topic_is_a_dialog(self) -> None:
         event, _ = await self._run(_msg("что решили по релизу?", 501, 500))

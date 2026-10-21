@@ -1,8 +1,9 @@
 """Bot native topics mode — topics in private chat with bot.
 
 See bot/topics.py:
-- main thread (no message_thread_id) → reply keyboard + all menu handlers;
-  menu presses that landed in a topic are moved here by MenuTopicMiddleware
+- main thread (no message_thread_id) → reply keyboard + menu handlers; a menu
+  press that opened a new topic is moved here by MenuTopicMiddleware, one
+  pressed inside an existing topic is answered in that topic
 - free text in the main thread → the bot opens a new dialog topic for it
 - every topic → agent pipeline (one dialog per topic)
 
@@ -87,8 +88,8 @@ async def cmd_start(message: Message):
             "Press <b>📱 Connect Telegram</b> below to get started."
         )
 
-    # MenuTopicMiddleware has already moved /start to the main thread, so
-    # message.answer() puts the keyboard there.
+    # /start from the topic list was moved to the main thread by
+    # MenuTopicMiddleware; /start inside a topic is answered in that topic.
     await drop_legacy_home_topic(message.bot, user_id, message.chat.id)
 
     await message.answer(
