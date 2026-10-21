@@ -3,10 +3,9 @@
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.strategy import FSMStrategy
 
 from agent_memory_mcp.bot.middlewares import UserMiddleware
-from agent_memory_mcp.bot.topics import MenuTopicMiddleware, TopicCreatedMiddleware
+from agent_memory_mcp.bot.topics import MenuFlowMiddleware
 from agent_memory_mcp.config import settings
 
 
@@ -23,11 +22,11 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    # Per-topic FSM: a flow waiting for input in the main thread ignores dialog topics.
-    dp = Dispatcher(fsm_strategy=FSMStrategy.USER_IN_TOPIC)
-    dp.message.outer_middleware(TopicCreatedMiddleware())  # «topic created» → next message is fresh
+    # FSM stays per user (USER_IN_CHAT): the answer to a menu prompt typed from
+    # «New Chat» lands in a new topic and must still reach the flow.
+    dp = Dispatcher()
     dp.message.middleware(UserMiddleware())
-    dp.message.middleware(MenuTopicMiddleware())  # menu → main thread, junk topics deleted
+    dp.message.middleware(MenuFlowMiddleware())  # menu press abandons a pending input flow
     dp.callback_query.middleware(UserMiddleware())
 
     # --- Forum mode handlers (priority) ---
