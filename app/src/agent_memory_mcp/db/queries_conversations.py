@@ -28,10 +28,13 @@ async def create_conversation(
     title: str = "",
     scope_type: str = "domain",
     group_id: UUID | None = None,
+    tg_thread_id: int | None = None,
 ) -> dict:
     values = dict(user_id=user_id, domain_id=domain_id, title=title, scope_type=scope_type)
     if group_id:
         values["group_id"] = group_id
+    if tg_thread_id is not None:
+        values["tg_thread_id"] = tg_thread_id
     stmt = (
         insert(conversations)
         .values(**values)
@@ -44,6 +47,24 @@ async def create_conversation(
 
 async def get_conversation(engine: AsyncEngine, conv_id: UUID) -> dict | None:
     stmt = select(conversations).where(conversations.c.id == conv_id)
+    async with engine.begin() as conn:
+        row = (await conn.execute(stmt)).mappings().one_or_none()
+        return dict(row) if row else None
+
+
+async def get_conversation_by_thread(
+    engine: AsyncEngine, user_id: int, tg_thread_id: int
+) -> dict | None:
+    """Dialog bound to a private-chat topic (one topic = one conversation)."""
+    stmt = (
+        select(conversations)
+        .where(
+            conversations.c.user_id == user_id,
+            conversations.c.tg_thread_id == tg_thread_id,
+        )
+        .order_by(conversations.c.created_at.desc())
+        .limit(1)
+    )
     async with engine.begin() as conn:
         row = (await conn.execute(stmt)).mappings().one_or_none()
         return dict(row) if row else None
@@ -120,6 +141,24 @@ async def get_active_conversation_id(
     )
     async with engine.begin() as conn:
         return (await conn.execute(stmt)).scalar()
+
+
+async def get_home_thread_id(engine: AsyncEngine, telegram_id: int) -> int | None:
+    stmt = select(users.c.home_thread_id).where(users.c.telegram_id == telegram_id)
+    async with engine.begin() as conn:
+        return (await conn.execute(stmt)).scalar()
+
+
+async def set_home_thread_id(
+    engine: AsyncEngine, telegram_id: int, thread_id: int | None
+) -> None:
+    stmt = (
+        update(users)
+        .where(users.c.telegram_id == telegram_id)
+        .values(home_thread_id=thread_id)
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
 
 
 # ---------------------------------------------------------------------------

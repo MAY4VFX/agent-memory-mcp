@@ -35,6 +35,7 @@ users = Table(
     Column("active_conversation_id", UUID(as_uuid=True)),
     Column("active_scope_type", String(16), server_default="domain"),
     Column("active_group_id", UUID(as_uuid=True)),
+    Column("home_thread_id", BigInteger),  # bot-created «🏠 Menu» topic in the private chat
     Column("points_balance", Integer, server_default="0", nullable=False),
     Column("total_points_spent", Integer, server_default="0", nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
@@ -305,6 +306,7 @@ conversations = Table(
     Column("message_count", Integer, server_default="0"),
     Column("scope_type", String(16), server_default="domain"),
     Column("group_id", UUID(as_uuid=True)),
+    Column("tg_thread_id", BigInteger),  # private-chat topic this dialog lives in
     Column("created_at", DateTime(timezone=True), server_default=text("now()")),
     Column("updated_at", DateTime(timezone=True), server_default=text("now()")),
 )

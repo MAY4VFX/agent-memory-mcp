@@ -3,8 +3,10 @@
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.strategy import FSMStrategy
 
 from agent_memory_mcp.bot.middlewares import UserMiddleware
+from agent_memory_mcp.bot.topics import MenuTopicMiddleware
 from agent_memory_mcp.config import settings
 
 
@@ -21,8 +23,10 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    dp = Dispatcher()
+    # Per-topic FSM: a flow waiting for input in 🏠 Menu ignores dialog topics.
+    dp = Dispatcher(fsm_strategy=FSMStrategy.USER_IN_TOPIC)
     dp.message.middleware(UserMiddleware())
+    dp.message.middleware(MenuTopicMiddleware())  # menu → 🏠 Menu topic, junk topics deleted
     dp.callback_query.middleware(UserMiddleware())
 
     # --- Forum mode handlers (priority) ---

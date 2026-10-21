@@ -16,7 +16,6 @@ from agent_memory_mcp.bot.keyboards import (
     folder_multi_kb,
     group_list_kb,
     list_detail_kb,
-    main_menu_kb,
     manage_kb,
     request_chat_kb,
     source_picker_kb,
@@ -512,7 +511,6 @@ async def set_scope_channel(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer(
         f"\u2705 \u041e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u0438\u0441\u043a\u0430: {domain['emoji']} {domain['display_name']}",
-        reply_markup=main_menu_kb(domain),
     )
 
 
@@ -527,7 +525,6 @@ async def set_scope_domain(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer(
         "\u2705 \u041e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u0438\u0441\u043a\u0430: \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a",
-        reply_markup=main_menu_kb(domain),
     )
 
 
@@ -546,7 +543,6 @@ async def set_scope_group(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer(
         f"\u2705 \u041e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u0438\u0441\u043a\u0430: {scope.label}",
-        reply_markup=main_menu_kb(scope_label=scope.label),
     )
 
 
@@ -561,7 +557,6 @@ async def set_scope_all(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer(
         f"\u2705 \u041e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u0438\u0441\u043a\u0430: {scope.label}",
-        reply_markup=main_menu_kb(scope_label=scope.label),
     )
 
 
