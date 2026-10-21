@@ -38,6 +38,9 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(auth_router)     # Telegram account auth (Telethon multi-session)
     dp.include_router(wallet_router)   # balance, topup, API keys, usage
 
+    from agent_memory_mcp.bot.sync_frequency import router as sync_frequency_router
+    dp.include_router(sync_frequency_router)  # ⏱ sync every… on source / folder cards
+
     # --- Legacy handlers (kept for admin/operator use) ---
     from agent_memory_mcp.bot.handlers.eval import router as eval_router
     from agent_memory_mcp.bot.handlers.domains import router as domains_router

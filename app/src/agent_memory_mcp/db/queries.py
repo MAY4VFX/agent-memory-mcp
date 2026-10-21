@@ -453,6 +453,25 @@ async def create_sync_job(
         return dict(row)
 
 
+async def reschedule_from_last_sync(engine: AsyncEngine, domain_ids: list[UUID]) -> None:
+    """After a frequency change: next sync = last sync + new frequency.
+
+    Never-synced sources keep their place in the queue (next_sync_at = now).
+    """
+    if not domain_ids:
+        return
+    stmt = (
+        update(domains)
+        .where(domains.c.id.in_(domain_ids), domains.c.last_synced_at.isnot(None))
+        .values(
+            next_sync_at=domains.c.last_synced_at
+            + func.make_interval(0, 0, 0, 0, 0, domains.c.sync_frequency_minutes)
+        )
+    )
+    async with engine.begin() as conn:
+        await conn.execute(stmt)
+
+
 async def get_latest_sync_job(engine: AsyncEngine, domain_id: UUID) -> dict | None:
     stmt = (
         select(sync_jobs)

@@ -298,10 +298,12 @@ async def _render_folder(callback: CallbackQuery, group_id: str, page: int = 0) 
 
     members = await gq.get_group_domains(async_engine, UUID(group_id))
     total_msgs = sum(m.get("message_count", 0) for m in members)
+    from agent_memory_mcp.bot.sync_frequency import folder_freq
     text_msg = (
         f"📁 <b>{group['name']}</b>\n\n"
         f"Channels: {len(members)}\n"
-        f"Total messages: {total_msgs}"
+        f"Total messages: {total_msgs}\n"
+        f"Sync every: {folder_freq(group, members)}"
     )
 
     await callback.answer()
@@ -323,6 +325,7 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
     name = f"@{domain['channel_username']}" if domain.get("channel_username") else domain.get("display_name", "?")
     synced = domain["last_synced_at"].strftime("%d.%m %H:%M") if domain.get("last_synced_at") else "not yet"
     monitoring = bool(domain.get("monitoring"))
+    from agent_memory_mcp.bot.sync_frequency import fmt_freq, fmt_next
     from agent_memory_mcp.bot.sync_progress import current_status
     sync_line, _ = await current_status(domain)
 
@@ -332,6 +335,7 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
         f"Entities: {domain.get('entity_count', 0)}\n"
         f"Depth: {domain.get('sync_depth', '?')}\n"
         f"Last synced: {synced}\n"
+        f"Sync every: {fmt_freq(domain.get('sync_frequency_minutes'))} · next {fmt_next(domain.get('next_sync_at'))}\n"
         f"Sync: {sync_line}\n"
         f"Observe Layer: {'✅ учитывается' if monitoring else '⬜ не учитывается'}"
     )
@@ -341,6 +345,7 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
             text=("✅" if monitoring else "⬜") + " Observe Layer",
             callback_data=f"src:mon:{source_id}",
         )],
+        [InlineKeyboardButton(text="⏱ Sync every…", callback_data=f"sfreq:{source_id}")],
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"src:view:{source_id}")],
         [InlineKeyboardButton(text="🗑 Delete", callback_data=f"src:delete:{source_id}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")],
