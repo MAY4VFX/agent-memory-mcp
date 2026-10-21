@@ -16,6 +16,7 @@ free text in a topic is that topic's dialog with the agent.
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import Any, Awaitable, Callable
 
 import structlog
@@ -39,14 +40,55 @@ MENU_TEXTS = {
 _TOPIC_LOCAL_COMMANDS = ("/export",)
 
 
-def is_fresh_topic(message: Message) -> bool:
-    """The message is the first one in a topic Telegram just auto-created for it.
+# Topics the user just opened, keyed by (chat_id, thread_id) → monotonic time.
+# Filled from the «topic created» service message Telegram sends right before
+# the first message of an auto-created topic; consumed by that first message.
+_fresh_topics: dict[tuple[int, int], float] = {}
+_FRESH_TTL = 120.0
 
-    A topic's id is the id of its «topic created» service message, and message
-    ids in a private chat are sequential, so the first real message is id + 1.
+
+def note_topic_created(message: Message) -> None:
+    """Remember a topic the user just opened (forum_topic_created service message)."""
+    if message.forum_topic_created is None or message.message_thread_id is None:
+        return
+    if message.from_user is None or message.from_user.is_bot:
+        return
+    now = time.monotonic()
+    for key, ts in list(_fresh_topics.items()):
+        if now - ts > _FRESH_TTL:
+            del _fresh_topics[key]
+    _fresh_topics[(message.chat.id, message.message_thread_id)] = now
+
+
+def take_fresh_topic(message: Message) -> bool:
+    """The message is the first one in a topic the user just opened; forget it after.
+
+    Message ids and topic ids are unrelated in a bot private chat (message
+    1141 in topic 1279454), so freshness comes from the service message only.
     """
     tid = message.message_thread_id
-    return tid is not None and message.message_id == tid + 1
+    if tid is None:
+        return False
+    return _fresh_topics.pop((message.chat.id, tid), None) is not None
+
+
+class TopicCreatedMiddleware(BaseMiddleware):
+    """Outer middleware: record «topic created» before any handler matching.
+
+    It runs synchronously at the start of the update, ahead of the user's
+    first message in that topic (the next update), and the service message
+    itself has no handler — an inner middleware would never see it.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if isinstance(event, Message) and event.chat.type == "private":
+            note_topic_created(event)
+        return await handler(event, data)
 
 
 def is_menu_message(message: Message, raw_state: str | None) -> bool:
@@ -91,10 +133,11 @@ class MenuTopicMiddleware(BaseMiddleware):
         if not isinstance(event, Message) or event.chat.type != "private" or not event.from_user:
             return await handler(event, data)
 
+        fresh = take_fresh_topic(event)
         main_state = _main_state(data)
         main_raw = await main_state.get_state() if main_state is not None else None
         menu = is_menu_message(event, data.get("raw_state"))
-        if not menu and is_fresh_topic(event) and main_raw is not None:
+        if not menu and fresh and main_raw is not None:
             # A flow in the main thread waits for input (add-source link, key
             # name, auth code), but the client sent the answer into a new
             # topic (real case: «@novchenkova» after «Add by link» landed in
@@ -106,13 +149,14 @@ class MenuTopicMiddleware(BaseMiddleware):
             message_id=event.message_id,
             thread_id=event.message_thread_id,
             is_topic=event.is_topic_message,
+            fresh=fresh,
             menu=menu,
         )
         # A menu press inside an existing topic is answered right there: the
         # user is looking at that topic, and an answer sent to the main thread
         # looks like "the button does nothing" (real case: «📡 Sources» pressed
         # in the friend's «@novchenkova» topic, answers went to the main thread).
-        if not menu or not is_fresh_topic(event):
+        if not menu or not fresh:
             return await handler(event, await _drop_stale_flow(event, data))
 
         bot: Bot = data["bot"]
