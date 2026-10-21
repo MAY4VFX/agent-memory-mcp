@@ -1,9 +1,10 @@
 """Bot native topics mode — topics in private chat with bot.
 
-A topics-enabled bot private chat has no General (see bot/topics.py):
-- 🏠 Menu topic (bot-created, users.home_thread_id) → reply keyboard + handlers
-- every other topic → agent pipeline (one dialog per topic)
-- free text in 🏠 Menu → the bot opens a new dialog topic for it
+See bot/topics.py:
+- main thread (no message_thread_id) → reply keyboard + all menu handlers;
+  menu presses that landed in a topic are moved here by MenuTopicMiddleware
+- free text in the main thread → the bot opens a new dialog topic for it
+- every topic → agent pipeline (one dialog per topic)
 
 Enable via @BotFather → bot settings → Topics.
 """
@@ -25,7 +26,7 @@ from aiogram.types import (
 
 import structlog
 
-from agent_memory_mcp.bot.topics import HOME_TOPIC_NAME, MENU_TEXTS, is_home_message, send_home
+from agent_memory_mcp.bot.topics import MENU_TEXTS, drop_legacy_home_topic
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.db.engine import async_engine
 from agent_memory_mcp.memory_api.auth import create_api_key_for_user
@@ -33,6 +34,9 @@ from agent_memory_mcp.memory_api.auth import create_api_key_for_user
 log = structlog.get_logger(__name__)
 
 router = Router()
+
+# Main thread of the private chat: no topic
+_MAIN = F.message_thread_id.is_(None)
 
 
 def main_menu_kb(telegram_connected: bool = False) -> ReplyKeyboardMarkup:
@@ -83,14 +87,11 @@ async def cmd_start(message: Message):
             "Press <b>📱 Connect Telegram</b> below to get started."
         )
 
-    # The keyboard lives in 🏠 Menu. /start sent from the topic list has
-    # already been moved there by MenuTopicMiddleware; /start typed inside a
-    # dialog topic gets a pointer instead of a second copy of the menu.
-    if not await is_home_message(message):
-        await message.answer(f"The menu is in the <b>{HOME_TOPIC_NAME}</b> topic ⬆️")
+    # MenuTopicMiddleware has already moved /start to the main thread, so
+    # message.answer() puts the keyboard there.
+    await drop_legacy_home_topic(message.bot, user_id, message.chat.id)
 
-    await send_home(
-        message.bot, user_id, message.chat.id,
+    await message.answer(
         (
             "🧠 <b>Agent Memory MCP</b>\n\n"
             "Long-term memory for Telegram-native AI agents.\n\n"
@@ -98,15 +99,14 @@ async def cmd_start(message: Message):
             "persistent memory that any AI agent can use.\n\n"
             + "\n".join(status_parts) + "\n\n"
             "Use the buttons below to manage your account ⬇️\n"
-            "Write a question here or in a new topic — each dialog gets its own topic."
+            "Write a question here — each dialog gets its own topic."
         ),
         reply_markup=main_menu_kb(telegram_connected=is_connected),
     )
 
     # Step 2: API key
     if existing_key:
-        await send_home(
-            message.bot, user_id, message.chat.id,
+        await message.answer(
             f"🔑 API key: <code>{existing_key['key_prefix']}...</code>\n"
             f"💰 Balance: <b>{balance}</b> points",
         )
@@ -114,8 +114,7 @@ async def cmd_start(message: Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔑 Create API Key", callback_data="create_first_key")],
         ])
-        await send_home(
-            message.bot, user_id, message.chat.id,
+        await message.answer(
             "🔑 <b>Create an API key</b> to connect your agents.\n"
             f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus points.",
             reply_markup=kb,
@@ -689,14 +688,14 @@ async def btn_help(message: Message):
     )
 
 
-# --- Text in 🏠 Menu → open a new dialog topic ---
+# --- Text in the main thread → open a new dialog topic ---
 
 @router.message(
-    is_home_message, StateFilter(None), F.text,
+    _MAIN, StateFilter(None), F.text,
     ~F.text.startswith("/"), ~F.text.in_(MENU_TEXTS),
 )
-async def home_text_to_topic(message: Message):
-    """User typed a question in 🏠 Menu → open a dialog topic and answer there.
+async def main_text_to_topic(message: Message):
+    """User typed a question in the main thread → open a dialog topic and answer there.
 
     The filter excludes anything that belongs to a dedicated handler in a
     later router, because matching here would consume the update:
@@ -721,7 +720,7 @@ async def home_text_to_topic(message: Message):
         return
 
     await message.answer(f"💬 Opened a new topic for it: <b>{html.quote(text[:100])}</b>")
-    # The question itself stays in 🏠 Menu — repeat it so the topic reads on its own.
+    # The question itself stays in the main thread — repeat it so the topic reads on its own.
     await message.bot.send_message(
         message.chat.id, f"❓ {html.quote(text)}", message_thread_id=topic.message_thread_id
     )

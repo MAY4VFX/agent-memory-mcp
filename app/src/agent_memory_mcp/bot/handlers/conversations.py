@@ -117,7 +117,7 @@ async def export_conversation(message: Message) -> None:
 
 @router.message(F.text, F.message_thread_id.is_not(None))
 async def handle_text_query(message: Message) -> None:
-    """Text in a dialog topic → agent pipeline (🏠 Menu text is handled in forum.py)."""
+    """Text in a dialog topic → agent pipeline (main-thread text is handled in forum.py)."""
     text = message.text.strip()
     if not text or text in MENU_TEXTS:
         return
