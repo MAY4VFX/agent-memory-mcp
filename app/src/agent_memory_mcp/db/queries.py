@@ -167,7 +167,9 @@ async def get_domains_for_sync(engine: AsyncEngine) -> list[dict]:
             domains.c.is_active.is_(True),
             domains.c.next_sync_at <= func.now(),
         )
-        .order_by(domains.c.next_sync_at)
+        # Never-synced sources first: a just-added source otherwise waits
+        # behind every overdue hourly re-sync (50+ in the queue, 3 at a time).
+        .order_by(domains.c.last_synced_at.is_(None).desc(), domains.c.next_sync_at)
     )
     async with engine.begin() as conn:
         rows = (await conn.execute(stmt)).mappings().all()
@@ -449,6 +451,38 @@ async def create_sync_job(
     async with engine.begin() as conn:
         row = (await conn.execute(stmt)).mappings().one()
         return dict(row)
+
+
+async def get_latest_sync_job(engine: AsyncEngine, domain_id: UUID) -> dict | None:
+    stmt = (
+        select(sync_jobs)
+        .where(sync_jobs.c.domain_id == domain_id)
+        .order_by(sync_jobs.c.created_at.desc())
+        .limit(1)
+    )
+    async with engine.begin() as conn:
+        row = (await conn.execute(stmt)).mappings().one_or_none()
+        return dict(row) if row else None
+
+
+async def count_sync_queue_ahead(engine: AsyncEngine, domain: dict) -> int:
+    """Due sources the scheduler will start before this one (same order as get_domains_for_sync)."""
+    if domain.get("next_sync_at") is None:
+        return 0
+    due = and_(domains.c.is_active.is_(True), domains.c.next_sync_at <= func.now())
+    if domain.get("last_synced_at") is None:
+        ahead = and_(
+            domains.c.last_synced_at.is_(None),
+            domains.c.next_sync_at < domain["next_sync_at"],
+        )
+    else:
+        ahead = or_(
+            domains.c.last_synced_at.is_(None),
+            domains.c.next_sync_at < domain["next_sync_at"],
+        )
+    stmt = select(func.count()).select_from(domains).where(due, ahead, domains.c.id != domain["id"])
+    async with engine.begin() as conn:
+        return (await conn.execute(stmt)).scalar() or 0
 
 
 async def get_recent_messages(

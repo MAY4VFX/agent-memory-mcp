@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import structlog
-from aiogram import F, Router
+from aiogram import F, Router, html
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
@@ -22,6 +22,7 @@ from agent_memory_mcp.bot.keyboards import (
     sources_hub_kb,
 )
 from agent_memory_mcp.bot.states import AddSourceStates, GroupStates
+from agent_memory_mcp.bot.sync_progress import track_sync
 from agent_memory_mcp.memory_api import service
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
@@ -183,7 +184,8 @@ async def on_chat_shared(message: Message) -> None:
     res = await service.add_source(
         message.from_user.id, str(bare), source_type="dialog", sync_range="3m"
     )
-    await message.answer(res.get("message") or f"Status: {res.get('status')}")
+    await message.answer(_add_result_line(res, str(bare)))
+    _track_if_queued(message, res)
 
 
 # ---------------- Add by link / @username / id ----------------
@@ -207,11 +209,31 @@ async def on_source_input(message: Message, state: FSMContext) -> None:
         await message.answer("Empty.")
         return
     out = []
+    queued = []
     for h in lines:
         st = "dialog" if h.lstrip("-").isdigit() else "channel"
         res = await service.add_source(message.from_user.id, h, source_type=st, sync_range="3m")
-        out.append(f"• {h}: {res.get('status')}")
+        out.append(_add_result_line(res, h))
+        queued.append(res)
     await message.answer("\n".join(out))
+    for res in queued:
+        _track_if_queued(message, res)
+
+
+def _add_result_line(res: dict, handle: str) -> str:
+    """One line per added source; the live sync status follows as its own message."""
+    status = res.get("status")
+    label = html.quote(res.get("channel") or handle)
+    if status == "queued":
+        return f"➕ {label} added."
+    if status == "exists":
+        return f"• {label} is already connected."
+    return f"⚠️ {html.quote(handle)}: {html.quote(res.get('message') or str(status))}"
+
+
+def _track_if_queued(message: Message, res: dict) -> None:
+    if res.get("status") == "queued" and res.get("domain_id"):
+        track_sync(message.bot, message.chat.id, message.message_thread_id, res["domain_id"])
 
 
 # ---------------- Multi-folder import ----------------

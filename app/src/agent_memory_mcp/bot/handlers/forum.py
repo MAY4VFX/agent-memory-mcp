@@ -12,6 +12,7 @@ Enable via @BotFather → bot settings → Topics.
 from __future__ import annotations
 
 from aiogram import F, Router, html
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -322,6 +323,8 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
     name = f"@{domain['channel_username']}" if domain.get("channel_username") else domain.get("display_name", "?")
     synced = domain["last_synced_at"].strftime("%d.%m %H:%M") if domain.get("last_synced_at") else "not yet"
     monitoring = bool(domain.get("monitoring"))
+    from agent_memory_mcp.bot.sync_progress import current_status
+    sync_line, _ = await current_status(domain)
 
     text_msg = (
         f"📡 <b>{name}</b>\n\n"
@@ -329,6 +332,7 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
         f"Entities: {domain.get('entity_count', 0)}\n"
         f"Depth: {domain.get('sync_depth', '?')}\n"
         f"Last synced: {synced}\n"
+        f"Sync: {sync_line}\n"
         f"Observe Layer: {'✅ учитывается' if monitoring else '⬜ не учитывается'}"
     )
 
@@ -337,11 +341,16 @@ async def _render_source_view(callback: CallbackQuery, source_id: str) -> None:
             text=("✅" if monitoring else "⬜") + " Observe Layer",
             callback_data=f"src:mon:{source_id}",
         )],
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"src:view:{source_id}")],
         [InlineKeyboardButton(text="🗑 Delete", callback_data=f"src:delete:{source_id}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="src:list")],
     ])
 
-    await callback.message.edit_text(text_msg, reply_markup=kb)
+    try:
+        await callback.message.edit_text(text_msg, reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e):
+            raise
     await callback.answer()
 
 
