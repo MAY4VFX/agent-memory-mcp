@@ -6,7 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.strategy import FSMStrategy
 
 from agent_memory_mcp.bot.middlewares import UserMiddleware
-from agent_memory_mcp.bot.topics import MenuTopicMiddleware
+from agent_memory_mcp.bot.topics import MenuTopicMiddleware, TopicCreatedMiddleware
 from agent_memory_mcp.config import settings
 
 
@@ -25,6 +25,7 @@ def create_bot() -> Bot:
 def create_dispatcher() -> Dispatcher:
     # Per-topic FSM: a flow waiting for input in the main thread ignores dialog topics.
     dp = Dispatcher(fsm_strategy=FSMStrategy.USER_IN_TOPIC)
+    dp.message.outer_middleware(TopicCreatedMiddleware())  # «topic created» → next message is fresh
     dp.message.middleware(UserMiddleware())
     dp.message.middleware(MenuTopicMiddleware())  # menu → main thread, junk topics deleted
     dp.callback_query.middleware(UserMiddleware())
