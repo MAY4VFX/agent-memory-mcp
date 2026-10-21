@@ -35,6 +35,13 @@ class RenderTests(unittest.TestCase):
         self.assertIn("downloading", text)
         self.assertFalse(done)
 
+    def test_running_with_default_zero_is_downloading(self) -> None:
+        # Real case: @tammba showed «processing 0 messages» while 3102 were
+        # being downloaded (sync_jobs.messages_fetched server_default 0).
+        text, done = sp.render_status("@tammba", _job("running", messages_fetched=0))
+        self.assertIn("downloading", text)
+        self.assertFalse(done)
+
     def test_processing_shows_count(self) -> None:
         text, done = sp.render_status("@tammba", _job("running", messages_fetched=865))
         self.assertIn("processing 865 messages", text)
