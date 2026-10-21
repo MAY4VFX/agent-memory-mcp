@@ -90,7 +90,15 @@ class MenuTopicMiddleware(BaseMiddleware):
         if not isinstance(event, Message) or event.chat.type != "private" or not event.from_user:
             return await handler(event, data)
 
+        main_state = _main_state(data)
+        main_raw = await main_state.get_state() if main_state is not None else None
         menu = is_menu_message(event, data.get("raw_state"))
+        if not menu and is_fresh_topic(event) and main_raw is not None:
+            # A flow in the main thread waits for input (add-source link, key
+            # name, auth code), but the client sent the answer into a new
+            # topic (real case: «@novchenkova» after «Add by link» landed in
+            # topic 316241 and went to the agent). It is the flow's input.
+            menu = True
         log.info(
             "bot_message",
             user_id=event.from_user.id,
@@ -116,14 +124,17 @@ class MenuTopicMiddleware(BaseMiddleware):
         ).as_(bot)
         # The FSM context was resolved for the topic; flows started now
         # (e.g. 📱 Connect → waiting_contact) must wait in the main thread.
-        state = data.get("state")
-        if state is not None:
-            main_state = FSMContext(
-                storage=state.storage,
-                key=dataclasses.replace(state.key, thread_id=None),
-            )
-            data = {**data, "state": main_state, "raw_state": await main_state.get_state()}
+        if main_state is not None:
+            data = {**data, "state": main_state, "raw_state": main_raw}
         return await handler(rerouted, await _drop_stale_flow(rerouted, data))
+
+
+def _main_state(data: dict[str, Any]) -> FSMContext | None:
+    """FSM context of the main thread for the same user and chat."""
+    state: FSMContext | None = data.get("state")
+    if state is None:
+        return None
+    return FSMContext(storage=state.storage, key=dataclasses.replace(state.key, thread_id=None))
 
 
 async def _drop_stale_flow(message: Message, data: dict[str, Any]) -> dict[str, Any]:

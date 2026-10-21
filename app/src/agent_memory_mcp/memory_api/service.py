@@ -204,8 +204,15 @@ async def _add_single_channel(
     owner_id: int, uc, handle: str, sync_range: str, sync_frequency_minutes: int = 60,
 ) -> dict:
     """Add a single channel as a source (resolved by @username / invite link)."""
+    from agent_memory_mcp.collector.client import LinkIsPersonError
+
     try:
         info = await uc.resolve_channel(handle)
+    except LinkIsPersonError as e:
+        # @username of a person → their 1:1 chat, if the user has one with them
+        return await _add_single_dialog(
+            owner_id, uc, str(e.user_id), sync_range, sync_frequency_minutes
+        )
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:
