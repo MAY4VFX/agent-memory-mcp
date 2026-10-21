@@ -58,6 +58,11 @@ class MenuFlowMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, Message) or event.chat.type != "private" or not event.from_user:
             return await handler(event, data)
+        if _is_topic_service(event):
+            # «Topic created» arrives right before the first message of a new
+            # topic; a waiting flow took it as (empty) input, answered «Empty.»
+            # and let the real «@tammba» go to the agent (messages 1161/1163).
+            return None
 
         log.info(
             "bot_message",
@@ -68,6 +73,13 @@ class MenuFlowMiddleware(BaseMiddleware):
             flow=data.get("raw_state"),
         )
         return await handler(event, await _drop_stale_flow(event, data))
+
+
+def _is_topic_service(message: Message) -> bool:
+    return any(
+        getattr(message, f) is not None
+        for f in ("forum_topic_created", "forum_topic_edited", "forum_topic_closed", "forum_topic_reopened")
+    )
 
 
 async def _drop_stale_flow(message: Message, data: dict[str, Any]) -> dict[str, Any]:

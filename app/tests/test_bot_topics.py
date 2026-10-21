@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import Chat, ForumTopicCreated, Message, Update, User
 
 from agent_memory_mcp.bot import topics
 
@@ -48,13 +48,17 @@ def _dispatcher() -> tuple[Dispatcher, dict]:
     dp.message.middleware(topics.MenuFlowMiddleware())
     seen: dict = {}
 
-    @dp.message(StateFilter(Flow.waiting_input))
-    async def flow_input(message: Message) -> None:
-        seen["by"], seen["thread"] = "flow", message.message_thread_id
-
+    # Menu buttons first, like bot.app: forum_router precedes the state handlers.
     @dp.message(F.text == "💰 Balance")
     async def balance(message: Message) -> None:
         seen["by"], seen["thread"] = "menu", message.message_thread_id
+
+    # No F.text on purpose: a state handler that takes any message is exactly
+    # what swallowed «topic created» in production.
+    @dp.message(StateFilter(Flow.waiting_input))
+    async def flow_input(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        seen["by"], seen["thread"], seen["text"] = "flow", message.message_thread_id, message.text
 
     @dp.message(F.text, F.message_thread_id.is_not(None))
     async def dialog(message: Message) -> None:
@@ -81,7 +85,27 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
 
         await dp.feed_update(_bot(), Update(update_id=1, message=_msg("@tamba", 1156, 1279469)))
 
-        self.assertEqual(seen, {"by": "flow", "thread": 1279469})
+        self.assertEqual(seen, {"by": "flow", "thread": 1279469, "text": "@tamba"})
+
+    async def test_topic_created_service_message_does_not_eat_the_flow(self) -> None:
+        # Real stream: 1161 «topic created» → flow answered «Empty.» and ended,
+        # 1163 «@tammba» then went to the agent.
+        dp, seen = _dispatcher()
+        await _set_flow(dp)
+        created = Message(
+            message_id=1161,
+            date=datetime.now(timezone.utc),
+            chat=Chat(id=USER_ID, type="private"),
+            from_user=User(id=USER_ID, is_bot=False, first_name="u"),
+            message_thread_id=1279475,
+            is_topic_message=True,
+            forum_topic_created=ForumTopicCreated(name="@tammba", icon_color=0),
+        )
+
+        await dp.feed_update(_bot(), Update(update_id=1, message=created))
+        await dp.feed_update(_bot(), Update(update_id=2, message=_msg("@tammba", 1163, 1279475)))
+
+        self.assertEqual(seen, {"by": "flow", "thread": 1279475, "text": "@tammba"})
 
     async def test_question_in_topic_goes_to_agent_in_that_topic(self) -> None:
         dp, seen = _dispatcher()

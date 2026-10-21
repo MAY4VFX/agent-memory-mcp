@@ -47,7 +47,7 @@ async def cmd_eval_add(message: Message, state: FSMContext) -> None:
     await message.answer("Введите вопрос для golden пары:")
 
 
-@router.message(EvalStates.waiting_question)
+@router.message(EvalStates.waiting_question, F.text)
 async def eval_receive_question(message: Message, state: FSMContext) -> None:
     if not _is_admin(message):
         return
@@ -56,7 +56,7 @@ async def eval_receive_question(message: Message, state: FSMContext) -> None:
     await message.answer("Теперь введите эталонный ответ:")
 
 
-@router.message(EvalStates.waiting_answer)
+@router.message(EvalStates.waiting_answer, F.text)
 async def eval_receive_answer(message: Message, state: FSMContext) -> None:
     if not _is_admin(message):
         return
