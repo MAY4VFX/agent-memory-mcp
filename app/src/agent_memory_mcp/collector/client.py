@@ -16,7 +16,7 @@ from telethon.errors import (
     TakeoutInvalidError,
 )
 from telethon.sessions import StringSession
-from telethon.tl.types import Channel, Message, PeerChannel
+from telethon.tl.types import Channel, Message, PeerChannel, User
 
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.models.messages import TelegramMessage
@@ -89,6 +89,14 @@ async def _resolve_invite(client, invite_hash: str) -> dict:
     return {"channel_id": chat.id, "title": chat.title, "username": chat.username or ""}
 
 
+class LinkIsPersonError(ValueError):
+    """The @username belongs to a person, not a channel — add it as a DM dialog."""
+
+    def __init__(self, link: str, user_id: int) -> None:
+        super().__init__(f"'{link}' is a person, not a channel/supergroup")
+        self.user_id = user_id
+
+
 async def resolve_link(client, link: str) -> dict:
     """Resolve a public link/@username or private invite link to channel info.
 
@@ -104,6 +112,8 @@ async def resolve_link(client, link: str) -> dict:
 
     username = _parse_channel_username(link)
     entity = await client.get_entity(username)
+    if isinstance(entity, User) and not entity.bot:
+        raise LinkIsPersonError(link, entity.id)
     if not isinstance(entity, Channel):
         raise ValueError(f"'{link}' is not a channel/supergroup")
     return {

@@ -116,6 +116,23 @@ class MiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(event.message_thread_id, 500)
 
+    async def test_flow_input_sent_into_new_topic_goes_to_the_flow(self) -> None:
+        await _state(self.storage, MAIN).set_state("AddSourceStates:waiting_input")
+
+        event, data = await self._run(_msg("@novchenkova", 1085, 1084))
+
+        self.bot.delete_forum_topic.assert_awaited_once_with(chat_id=USER_ID, message_thread_id=1084)
+        self.assertIsNone(event.message_thread_id)
+        self.assertEqual(data["raw_state"], "AddSourceStates:waiting_input")
+
+    async def test_question_in_existing_topic_ignores_main_flow(self) -> None:
+        await _state(self.storage, MAIN).set_state("AddSourceStates:waiting_input")
+
+        event, _ = await self._run(_msg("что решили по релизу?", 530, 500))
+
+        self.bot.delete_forum_topic.assert_not_awaited()
+        self.assertEqual(event.message_thread_id, 500)
+
     async def test_rerouted_flow_waits_in_main(self) -> None:
         _, data = await self._run(_msg("📱 Connect Telegram", 501, 500))
         await data["state"].set_state("AuthStates:waiting_contact")
