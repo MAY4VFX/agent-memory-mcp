@@ -1,16 +1,16 @@
 """Bot native topics mode — topics in private chat with bot.
 
-Bot uses native forum topics (Bot API Dec 2025):
-- Messages without thread_id (General/default) → reply keyboard + handlers
-- Messages in a topic thread → agent pipeline (memory chat dialog)
+A topics-enabled bot private chat has no General (see bot/topics.py):
+- 🏠 Menu topic (bot-created, users.home_thread_id) → reply keyboard + handlers
+- every other topic → agent pipeline (one dialog per topic)
+- free text in 🏠 Menu → the bot opens a new dialog topic for it
 
 Enable via @BotFather → bot settings → Topics.
-No group/supergroup needed — topics work in private chat.
 """
 
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import F, Router, html
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -25,6 +25,7 @@ from aiogram.types import (
 
 import structlog
 
+from agent_memory_mcp.bot.topics import HOME_TOPIC_NAME, MENU_TEXTS, is_home_message, send_home
 from agent_memory_mcp.config import settings
 from agent_memory_mcp.db.engine import async_engine
 from agent_memory_mcp.memory_api.auth import create_api_key_for_user
@@ -32,13 +33,6 @@ from agent_memory_mcp.memory_api.auth import create_api_key_for_user
 log = structlog.get_logger(__name__)
 
 router = Router()
-
-# Filter: only General topic (no thread_id) for reply keyboard buttons.
-# This prevents button presses from creating new topics.
-_GENERAL = F.message_thread_id.is_(None)
-
-# All reply keyboard button texts — used to exclude them from topic creation
-_BUTTON_TEXTS = {"💰 Balance", "📡 Sources", "🔑 API Keys", "💎 Top Up", "📊 Usage", "❓ Help", "📱 Connect Telegram"}
 
 
 def main_menu_kb(telegram_connected: bool = False) -> ReplyKeyboardMarkup:
@@ -89,26 +83,30 @@ async def cmd_start(message: Message):
             "Press <b>📱 Connect Telegram</b> below to get started."
         )
 
-    # Send to General (no message_thread_id) so the persistent reply keyboard
-    # binds to the main view, not to whatever topic /start was pressed in. In
-    # forum (topics) mode message.answer() would inherit the source thread and
-    # the menu buttons would only ever appear inside that thread.
-    await message.bot.send_message(
-        chat_id=message.chat.id,
-        text=(
+    # The keyboard lives in 🏠 Menu. /start sent from the topic list has
+    # already been moved there by MenuTopicMiddleware; /start typed inside a
+    # dialog topic gets a pointer instead of a second copy of the menu.
+    if not await is_home_message(message):
+        await message.answer(f"The menu is in the <b>{HOME_TOPIC_NAME}</b> topic ⬆️")
+
+    await send_home(
+        message.bot, user_id, message.chat.id,
+        (
             "🧠 <b>Agent Memory MCP</b>\n\n"
             "Long-term memory for Telegram-native AI agents.\n\n"
             "We turn your chats, channels, and folders into structured "
             "persistent memory that any AI agent can use.\n\n"
             + "\n".join(status_parts) + "\n\n"
-            "Use the buttons below to manage your account ⬇️"
+            "Use the buttons below to manage your account ⬇️\n"
+            "Write a question here or in a new topic — each dialog gets its own topic."
         ),
         reply_markup=main_menu_kb(telegram_connected=is_connected),
     )
 
     # Step 2: API key
     if existing_key:
-        await message.answer(
+        await send_home(
+            message.bot, user_id, message.chat.id,
             f"🔑 API key: <code>{existing_key['key_prefix']}...</code>\n"
             f"💰 Balance: <b>{balance}</b> points",
         )
@@ -116,7 +114,8 @@ async def cmd_start(message: Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔑 Create API Key", callback_data="create_first_key")],
         ])
-        await message.answer(
+        await send_home(
+            message.bot, user_id, message.chat.id,
             "🔑 <b>Create an API key</b> to connect your agents.\n"
             f"You'll get <b>{settings.welcome_bonus_credits}</b> bonus points.",
             reply_markup=kb,
@@ -690,46 +689,42 @@ async def btn_help(message: Message):
     )
 
 
-# --- Text in General → create new topic thread ---
+# --- Text in 🏠 Menu → open a new dialog topic ---
 
-@router.message(_GENERAL, StateFilter(None), F.text, ~F.text.startswith("/"), ~F.text.in_(_BUTTON_TEXTS))
-async def general_text_to_topic(message: Message, state: FSMContext):
-    """User typed free text → create a new thread for agent chat.
+@router.message(
+    is_home_message, StateFilter(None), F.text,
+    ~F.text.startswith("/"), ~F.text.in_(MENU_TEXTS),
+)
+async def home_text_to_topic(message: Message):
+    """User typed a question in 🏠 Menu → open a dialog topic and answer there.
 
     The filter excludes anything that belongs to a dedicated handler in a
-    later router, because matching-then-returning here would consume the
-    update and dead-end that handler:
+    later router, because matching here would consume the update:
     - StateFilter(None): skip while any FSM flow is active (auth code/2FA,
-      etc.) so the update reaches auth_router's state handlers.
-    - ~F.text.in_(_BUTTON_TEXTS): let reply-keyboard buttons reach their
+      key name, add-source link) so the update reaches its state handler.
+    - ~F.text.in_(MENU_TEXTS): let reply-keyboard buttons reach their
       handlers (auth "📱 Connect Telegram", wallet "💎 Top Up").
     """
+    from agent_memory_mcp.bot.handlers.conversations import answer_in_topic
+
     text = message.text.strip()
     if not text:
         return
 
-    # Create forum topic with the message text as title
     try:
-        topic = await message.bot.create_forum_topic(
-            chat_id=message.chat.id,
-            name=text[:128],
-        )
-        # Send the user's query into the new topic — it will be caught
-        # by conversations.py catch-all handler in that thread
-        await message.bot.send_message(
-            chat_id=message.chat.id,
-            message_thread_id=topic.message_thread_id,
-            text=f"💬 <b>New chat:</b> {text[:100]}\n\n⏳ Processing...",
-        )
-        # Forward the original message to the new topic so conversations.py picks it up
-        await message.bot.send_message(
-            chat_id=message.chat.id,
-            message_thread_id=topic.message_thread_id,
-            text=text,
-        )
+        topic = await message.bot.create_forum_topic(chat_id=message.chat.id, name=text[:128])
     except Exception:
         log.exception("create_forum_topic_failed")
         await message.answer(
-            "💬 Write your question and I'll create a new chat thread.\n"
-            "If topics aren't enabled, use the MCP tools directly."
+            "Couldn't open a new topic. Write your question in a new topic instead."
         )
+        return
+
+    await message.answer(f"💬 Opened a new topic for it: <b>{html.quote(text[:100])}</b>")
+    # The question itself stays in 🏠 Menu — repeat it so the topic reads on its own.
+    await message.bot.send_message(
+        message.chat.id, f"❓ {html.quote(text)}", message_thread_id=topic.message_thread_id
+    )
+    await answer_in_topic(
+        message.bot, message.chat.id, topic.message_thread_id, message.from_user, text
+    )

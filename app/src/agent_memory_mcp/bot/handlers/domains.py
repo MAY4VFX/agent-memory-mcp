@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 import structlog
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -18,32 +16,15 @@ from agent_memory_mcp.db.engine import async_engine
 log = structlog.get_logger(__name__)
 router = Router()
 
-_LINK_RE = re.compile(
-    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:\+)?([a-zA-Z0-9_]+)"
-)
-
-_DOMAIN_EMOJIS = {"\U0001f525", "\U0001f916", "\U0001f3ac", "\U0001f9e0",
-                  "\U0001f4a1", "\U0001f4da", "\U0001f3a8", "\U0001f4b0",
-                  "\U0001f4c1", "\U0001f30d"}
-
-
-def _looks_like_channel(text: str | None) -> bool:
-    if not text:
-        return False
-    text = text.strip()
-    return text.startswith("@") or bool(_LINK_RE.match(text))
-
 
 def _is_domain_button(text: str) -> bool:
     """Check if text matches the domain reply-keyboard button."""
     if not text:
         return False
-    if text in ("\U0001f4da \u041a\u0430\u043d\u0430\u043b\u044b", "\U0001f4da \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438"):
-        return True
-    for e in _DOMAIN_EMOJIS:
-        if text.startswith(e + " ") and not _looks_like_channel(text):
-            return True
-    return False
+    # Only the legacy keyboard's fixed labels. The old per-domain label
+    # ("<emoji> <name>") is no longer sent, and matching any text that starts
+    # with one of those emojis swallowed dialog questions like "💡 …".
+    return text in ("\U0001f4da \u041a\u0430\u043d\u0430\u043b\u044b", "\U0001f4da \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438")
 
 
 @router.message(F.text.func(_is_domain_button))

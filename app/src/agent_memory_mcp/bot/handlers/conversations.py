@@ -6,11 +6,12 @@ import asyncio
 from uuid import UUID
 
 import structlog
-from aiogram import F, Router
-from aiogram.types import BufferedInputFile, Message
+from aiogram import Bot, F, Router
+from aiogram.types import BufferedInputFile, Message, User
 
 from agent_memory_mcp.bot.formatters import format_answer, format_conversation_export
 from agent_memory_mcp.bot.keyboards import conversation_list_kb, main_menu_kb
+from agent_memory_mcp.bot.topics import MENU_TEXTS
 from agent_memory_mcp.config import is_allowed_user
 from agent_memory_mcp.db import queries as db_q
 from agent_memory_mcp.db import queries_conversations as qc
@@ -114,28 +115,30 @@ async def export_conversation(message: Message) -> None:
 
 # ------------------------------------------------------------------ Query handler
 
-_BUTTON_TEXTS = {"💰 Balance", "📡 Sources", "🔑 API Keys", "💎 Top Up", "📊 Usage", "❓ Help", "📱 Connect Telegram"}
-
 @router.message(F.text, F.message_thread_id.is_not(None))
 async def handle_text_query(message: Message) -> None:
-    """Handle text in topic threads → agent pipeline. Only fires inside topics, not General."""
-    # Skip reply keyboard button presses that leaked into topics
-    if message.text.strip() in _BUTTON_TEXTS:
-        return
-    if not is_allowed_user(message.from_user.id, message.from_user.username):
-        await message.answer("Доступ ограничен.")
-        return
-
+    """Text in a dialog topic → agent pipeline (🏠 Menu text is handled in forum.py)."""
     text = message.text.strip()
-    if not text:
+    if not text or text in MENU_TEXTS:
+        return
+    await answer_in_topic(
+        message.bot, message.chat.id, message.message_thread_id, message.from_user, text
+    )
+
+
+async def answer_in_topic(bot: Bot, chat_id: int, thread_id: int, from_user: User, text: str) -> None:
+    """Run one dialog turn in a topic. One topic = one conversation."""
+
+    async def send(t: str) -> Message:
+        return await bot.send_message(chat_id, t, message_thread_id=thread_id)
+
+    if not is_allowed_user(from_user.id, from_user.username):
+        await send("Доступ ограничен.")
         return
 
-    user = await db_q.get_user(async_engine, message.from_user.id)
+    user = await db_q.get_user(async_engine, from_user.id)
     if not user:
-        await message.answer(
-            "Сначала подключите канал через \u2699\ufe0f Настройки.",
-            reply_markup=main_menu_kb(),
-        )
+        await send("Account not found. Press /start")
         return
 
     # Resolve scope — default to ALL domains if no specific scope set
@@ -143,7 +146,7 @@ async def handle_text_query(message: Message) -> None:
     scope = await gq.resolve_scope(async_engine, user)
     if not scope.domain_ids:
         # Fallback: try all user's domains
-        all_domains = await db_q.list_domains(async_engine, message.from_user.id)
+        all_domains = await db_q.list_domains(async_engine, from_user.id)
         if all_domains:
             scope = gq.ScopeInfo(
                 scope_type="all",
@@ -152,7 +155,7 @@ async def handle_text_query(message: Message) -> None:
                 label=f"All sources ({len(all_domains)})",
             )
         else:
-            await message.answer("No sources connected. Add channels first via 📡 Sources or MCP.")
+            await send("No sources connected. Add channels first via 📡 Sources or MCP.")
             return
 
     domain_id = user.get("active_domain_id")
@@ -163,24 +166,20 @@ async def handle_text_query(message: Message) -> None:
     if search_mode not in ("fast", "balanced", "deep"):
         search_mode = "balanced"
 
-    # Ensure active conversation exists
-    conv_id = await qc.get_active_conversation_id(async_engine, message.from_user.id)
-    if not conv_id:
+    # The topic's own conversation; active_conversation follows it for /export
+    conv = await qc.get_conversation_by_thread(async_engine, from_user.id, thread_id)
+    if not conv:
         conv = await qc.create_conversation(
             async_engine,
-            user_id=message.from_user.id,
+            user_id=from_user.id,
             domain_id=domain_id,
             title=text[:50],
             scope_type=scope.scope_type,
             group_id=scope.group_id,
+            tg_thread_id=thread_id,
         )
-        conv_id = conv["id"]
-        await qc.set_active_conversation(async_engine, message.from_user.id, conv_id)
-    else:
-        # Auto-title: set title from first message if empty
-        conv = await qc.get_conversation(async_engine, conv_id)
-        if conv and not conv.get("title"):
-            await qc.update_conversation(async_engine, conv_id, title=text[:50])
+    conv_id = conv["id"]
+    await qc.set_active_conversation(async_engine, from_user.id, conv_id)
 
     # Save user message
     user_token_count = count_tokens(text)
@@ -193,7 +192,7 @@ async def handle_text_query(message: Message) -> None:
     )
 
     # Show typing indicator
-    typing_msg = await message.answer("\u2699\ufe0f Думаю...")
+    typing_msg = await send("\u2699\ufe0f Думаю...")
 
     try:
         # Initialize storage clients
@@ -214,7 +213,7 @@ async def handle_text_query(message: Message) -> None:
         try:
             answer, payload = await run_query_pipeline(
                 query=text,
-                user_id=message.from_user.id,
+                user_id=from_user.id,
                 conversation_id=conv_id,
                 domain_ids=scope.domain_ids,
                 engine=async_engine,
@@ -269,12 +268,12 @@ async def handle_text_query(message: Message) -> None:
         await typing_msg.delete()
         # Split long messages (Telegram limit 4096 chars)
         if len(formatted) <= 4096:
-            await message.answer(formatted)
+            await send(formatted)
         else:
             # Split at line boundaries
             chunks = _split_message(formatted, 4096)
             for chunk in chunks:
-                await message.answer(chunk)
+                await send(chunk)
 
     except Exception:
         log.exception("query_pipeline_error", query=text[:100])
