@@ -23,10 +23,10 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    # Per-topic FSM: a flow waiting for input in 🏠 Menu ignores dialog topics.
+    # Per-topic FSM: a flow waiting for input in the main thread ignores dialog topics.
     dp = Dispatcher(fsm_strategy=FSMStrategy.USER_IN_TOPIC)
     dp.message.middleware(UserMiddleware())
-    dp.message.middleware(MenuTopicMiddleware())  # menu → 🏠 Menu topic, junk topics deleted
+    dp.message.middleware(MenuTopicMiddleware())  # menu → main thread, junk topics deleted
     dp.callback_query.middleware(UserMiddleware())
 
     # --- Forum mode handlers (priority) ---
