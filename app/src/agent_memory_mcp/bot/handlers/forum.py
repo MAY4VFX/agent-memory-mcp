@@ -1,11 +1,10 @@
 """Bot native topics mode — topics in private chat with bot.
 
-See bot/topics.py:
-- main thread (no message_thread_id) → reply keyboard + menu handlers; a menu
-  press that opened a new topic is moved here by MenuTopicMiddleware, one
-  pressed inside an existing topic is answered in that topic
+See bot/topics.py — every message is answered where it came from:
+- main thread (no message_thread_id) → reply keyboard + menu handlers
 - free text in the main thread → the bot opens a new dialog topic for it
-- every topic → agent pipeline (one dialog per topic)
+- free text in a topic → that topic's dialog with the agent, unless a menu
+  flow (key name, auth code, add-source link) is waiting for it
 
 Enable via @BotFather → bot settings → Topics.
 """
@@ -88,8 +87,6 @@ async def cmd_start(message: Message):
             "Press <b>📱 Connect Telegram</b> below to get started."
         )
 
-    # /start from the topic list was moved to the main thread by
-    # MenuTopicMiddleware; /start inside a topic is answered in that topic.
     await drop_legacy_home_topic(message.bot, user_id, message.chat.id)
 
     await message.answer(
