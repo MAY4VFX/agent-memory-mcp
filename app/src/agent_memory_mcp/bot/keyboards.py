@@ -177,6 +177,7 @@ def folder_view_kb(
     """Channels inside a folder — paginated, folders can hold hundreds."""
     buttons = [[_source_button(d)] for d in _paginate(members, page)]
     buttons.extend(_page_nav(members, page, f"pg:fld:{group_id}:"))
+    buttons.append([InlineKeyboardButton(text="⏱ Sync every…", callback_data=f"ffreq:{group_id}")])
     buttons.append([InlineKeyboardButton(
         text="\U0001f5d1 Delete Folder", callback_data=f"src:delfolder:{group_id}"
     )])
